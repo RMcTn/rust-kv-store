@@ -1,0 +1,4 @@
+# Ignore everything in the directory except this .gitignore file
+# Needed to have an empty dir in git, so we have somewhere to store temporary test files
+*
+!.gitignore
