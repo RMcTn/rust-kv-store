@@ -78,13 +78,9 @@ impl Store {
         self.file_offset += row_size;
     }
 
-    pub fn get(&self, key: &u32) -> Option<&u32> {
-        return self.data.get(key);
-    }
-
     pub fn get2(&mut self, key: &u32) -> Option<Vec<u8>> {
         // TODO: Handle this unwrap
-        let entry = self.data2.get(key).unwrap();
+        let entry = self.data2.get(key)?;
         let mut buffer: Vec<u8> = vec![0; entry.value_size];
 
         let seperator_byte_size = 1;
@@ -141,15 +137,15 @@ mod tests {
         let test_filename = TEMP_TEST_FILE_DIR.to_string() + "stores_and_retrieves.kv";
         let mut store = Store::new(Some(&test_filename), false);
         let test_key = 50;
-        assert_eq!(store.get(&test_key), None);
+        assert_eq!(store.get2(&test_key), None);
 
         store.store(test_key, 100);
-        assert_eq!(store.get(&test_key), Some(&100));
+        assert_eq!(store.get2(&test_key).unwrap(), 100.to_string().as_bytes());
         store.store(test_key, 101);
-        assert_eq!(store.get(&test_key), Some(&101));
+        assert_eq!(store.get2(&test_key).unwrap(), 101.to_string().as_bytes());
 
         store.store(test_key + 1, 101);
-        assert_eq!(store.get(&(test_key + 1)), Some(&101));
+        assert_eq!(store.get2(&(test_key + 1)).unwrap(), 101.to_string().as_bytes());
     }
 
     #[test]
@@ -160,7 +156,7 @@ mod tests {
         store.store(test_key, 100);
 
         store.remove(test_key);
-        assert_eq!(store.get(&test_key), None);
+        assert_eq!(store.get2(&test_key), None);
     }
 
     #[test]
@@ -176,10 +172,10 @@ mod tests {
         store.remove(other_test_key);
         store.store(other_test_key, 2000);
 
-        let store = Store::new(Some(&test_filename), true);
+        let mut store = Store::new(Some(&test_filename), true);
 
-        assert_eq!(store.get(&deleted_test_key), None);
-        assert_eq!(store.get(&other_test_key), Some(&2000));
+        assert_eq!(store.get2(&deleted_test_key), None);
+        assert_eq!(store.get2(&other_test_key).unwrap(), 2000.to_string().as_bytes());
     }
 
     #[test]
