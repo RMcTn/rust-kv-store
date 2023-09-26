@@ -83,9 +83,9 @@ impl Store {
         let entry = self.data2.get(key)?;
         let mut buffer: Vec<u8> = vec![0; entry.value_size];
 
-        let seperator_byte_size = 1;
+        let separator_byte_size = 1;
         let value_offset_in_file =
-            entry.byte_offset_for_key + entry.key_size + seperator_byte_size; // - 1 since we
+            entry.byte_offset_for_key + entry.key_size + separator_byte_size; // - 1 since we
         // start at 0
         // We're storing the key offset, so need to skip over the size of the key, and the size of
         // the separator ","
@@ -93,6 +93,11 @@ impl Store {
         self.store
             .read_exact_at(&mut buffer, value_offset_in_file as u64)
             .unwrap();
+        if buffer.is_empty() {
+            // Is there a valid use case for having an empty value for a key? Assuming it is
+            // the tombstone for now
+            return None;
+        }
         return Some(buffer);
     }
 
@@ -108,21 +113,21 @@ impl Store {
             let splits: Vec<_> = line.split_terminator(",").collect();
             let key_size = splits[0].len();
             let key: u32 = splits[0].parse().unwrap();
-            if splits.len() == 1 {
+            let value_size = if splits.len() == 1
+            {
                 // Assume our tombstone is just "nothing" after a comma for now(?)
-                data.remove(&key);
-                continue;
-            }
-            debug_assert_eq!(splits.len(), 2);
-            let value_size = splits[1].len();
-            let value: u32 = splits[1].parse().unwrap();
+                0
+            } else {
+                splits[1].len()
+            };
+            // debug_assert_eq!(splits.len(), 2);
             let entry =
                 Entry {
                     value_size,
                     key_size,
                     byte_offset_for_key: byte_offset,
                 };
-            byte_offset += line.len();
+            byte_offset += line.len() + 1; // 1 for newline
             data.insert(key, entry);
         }
         return data;
@@ -132,7 +137,18 @@ impl Store {
         self.data.remove(&key);
         // No value after key is our "tombstone" for now
         let row = format!("{},\n", key);
-        self.store.write_all(row.as_bytes()).unwrap();
+        // TODO: Cleanup duplication with regular "store" method"
+        let bytes = row.as_bytes();
+        let row_size = row.as_bytes().len();
+        self.store.write_all(bytes).unwrap();
+        let key_str = key.to_string();
+        let entry = Entry {
+            value_size: 0,
+            key_size: key_str.len(),
+            byte_offset_for_key: self.file_offset,
+        };
+        self.data2.insert(key, entry);
+        self.file_offset += row_size;
     }
 }
 
@@ -185,7 +201,10 @@ mod tests {
         let mut store = Store::new(Some(&test_filename), true);
 
         assert_eq!(store.get2(&deleted_test_key), None);
-        assert_eq!(store.get2(&other_test_key).unwrap(), 2000.to_string().as_bytes());
+        let val = store.get2(&other_test_key).unwrap();
+        let expected_val = 2000.to_string();
+        let expected_val = expected_val.as_bytes();
+        assert_eq!(val, expected_val);
     }
 
     #[test]
@@ -205,4 +224,5 @@ mod tests {
         let bytes = store.get2(&key).unwrap();
         assert_eq!(bytes, value.to_string().as_bytes());
     }
+    // TODO: Some tombstone tests
 }
