@@ -52,7 +52,7 @@ impl Store {
     }
 
     /// Does not escape any characters
-    pub fn store(&mut self, key: u32, value: u32) {
+    pub fn put(&mut self, key: u32, value: u32) {
         let row = format!("{},{}\n", key, value);
         let bytes = row.as_bytes();
         let row_size = row.as_bytes().len();
@@ -153,12 +153,12 @@ mod tests {
         let test_key = 50;
         assert_eq!(store.get(&test_key), None);
 
-        store.store(test_key, 100);
+        store.put(test_key, 100);
         assert_eq!(store.get(&test_key).unwrap(), 100.to_string().as_bytes());
-        store.store(test_key, 101);
+        store.put(test_key, 101);
         assert_eq!(store.get(&test_key).unwrap(), 101.to_string().as_bytes());
 
-        store.store(test_key + 1, 101);
+        store.put(test_key + 1, 101);
         assert_eq!(
             store.get(&(test_key + 1)).unwrap(),
             101.to_string().as_bytes()
@@ -170,7 +170,7 @@ mod tests {
         let test_filename = TEMP_TEST_FILE_DIR.to_string() + "deletes.kv";
         let mut store = Store::new(Some(&test_filename), false);
         let test_key = 50;
-        store.store(test_key, 100);
+        store.put(test_key, 100);
 
         store.remove(test_key);
         assert_eq!(store.get(&test_key), None);
@@ -182,12 +182,12 @@ mod tests {
         let mut store = Store::new(Some(&test_filename), false);
         let deleted_test_key = 50;
         let other_test_key = 999;
-        store.store(deleted_test_key, 100);
+        store.put(deleted_test_key, 100);
         store.remove(deleted_test_key);
 
-        store.store(other_test_key, 1000);
+        store.put(other_test_key, 1000);
         store.remove(other_test_key);
-        store.store(other_test_key, 2000);
+        store.put(other_test_key, 2000);
 
         let mut store = Store::new(Some(&test_filename), true);
 
@@ -205,13 +205,13 @@ mod tests {
         assert_eq!(store.file_offset, 0);
         let key = 1;
         let value = 2;
-        store.store(key, value);
+        store.put(key, value);
 
         let bytes = store.get(&key).unwrap();
         assert_eq!(bytes, value.to_string().as_bytes());
         let key = 500;
         let value = 5000000;
-        store.store(key, value);
+        store.put(key, value);
         let bytes = store.get(&key).unwrap();
         assert_eq!(bytes, value.to_string().as_bytes());
     }
