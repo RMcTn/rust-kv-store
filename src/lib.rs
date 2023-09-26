@@ -46,9 +46,9 @@ impl Store {
                 .unwrap()
         };
         let file_size = file.metadata().unwrap().len() as usize;
-        let data = Store::build_store_from_file(&mut file);
+        let data = HashMap::new();
+        let data2 = Store::build_store_from_file(&mut file);
 
-        let data2 = HashMap::new();
 
         return Store {
             store: file,
@@ -96,24 +96,34 @@ impl Store {
         return Some(buffer);
     }
 
-    fn build_store_from_file(file: &mut File) -> HashMap<u32, u32> {
+    fn build_store_from_file(file: &mut File) -> HashMap<u32, Entry> {
         let mut data = HashMap::new();
         // Go through the entire file
         let mut buffer = String::new();
         // Need to rewind back before any writes until we only read file on startup
         file.rewind().unwrap();
         file.read_to_string(&mut buffer).unwrap();
+        let mut byte_offset = 0;
         for line in buffer.lines() {
             let splits: Vec<_> = line.split_terminator(",").collect();
+            let key_size = splits[0].len();
             let key: u32 = splits[0].parse().unwrap();
             if splits.len() == 1 {
-                // Assume our tombstone is just "nothing" after a comma
+                // Assume our tombstone is just "nothing" after a comma for now(?)
                 data.remove(&key);
                 continue;
             }
             debug_assert_eq!(splits.len(), 2);
+            let value_size = splits[1].len();
             let value: u32 = splits[1].parse().unwrap();
-            data.insert(key, value);
+            let entry =
+                Entry {
+                    value_size,
+                    key_size,
+                    byte_offset_for_key: byte_offset,
+                };
+            byte_offset += line.len();
+            data.insert(key, entry);
         }
         return data;
     }
