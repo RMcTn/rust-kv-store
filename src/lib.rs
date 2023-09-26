@@ -56,6 +56,7 @@ impl Store {
         let bytes = row.as_bytes();
         let row_size = row.as_bytes().len();
         self.store.write_all(bytes).unwrap();
+        self.data2.insert(key, self.file_offset);
         self.file_offset += row_size;
     }
 
@@ -151,9 +152,14 @@ mod tests {
         let test_filename = TEMP_TEST_FILE_DIR.to_string() + "fileoffset.kv";
         let mut store = Store::new(Some(&test_filename), false);
         assert_eq!(store.file_offset, 0);
-        store.store(1, 2);
-        let key_and_value_size_in_bytes = 4; // key is a byte, val is a byte, comma takes a byte,
-                                             // newline takes a byte
-        assert_eq!(store.file_offset, key_and_value_size_in_bytes);
+        let key = 1;
+        store.store(key, 2);
+        let expected_file_offset = 4; // key is a byte, val is a byte, comma takes a byte,
+                                      // newline takes a byte
+        assert_eq!(store.file_offset, expected_file_offset);
+        let previous_file_offset = store.file_offset;
+        assert_eq!(*store.data2.get(&key).unwrap(), 0);
+        store.store(key, 2);
+        assert_eq!(*store.data2.get(&key).unwrap(), previous_file_offset)
     }
 }
