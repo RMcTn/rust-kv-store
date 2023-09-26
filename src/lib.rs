@@ -1,13 +1,21 @@
+// TODO: "Log" Compaction
 use std::{
     collections::HashMap,
     fs::{self, File},
     io::{Read, Seek, Write},
 };
 
+type FileOffset = usize;
+
 const DEFAULT_STORE_FILENAME: &str = "store.kv";
 pub struct Store {
     store: File,
+    // NOTE: TODO: Our naive approach here of just storing stuff in a hashmap doesn't allow us to
+    // have arbitrary values
     data: HashMap<u32, u32>,
+
+    data2: HashMap<u32, FileOffset>,
+    file_offset: usize,
 }
 
 impl Store {
@@ -28,16 +36,27 @@ impl Store {
                 .open(filename.unwrap_or(DEFAULT_STORE_FILENAME))
                 .unwrap()
         };
+        let file_size = file.metadata().unwrap().len() as usize;
         let data = Store::build_store_from_file(&mut file);
 
-        return Store { store: file, data };
+        let data2 = HashMap::new();
+
+        return Store {
+            store: file,
+            data,
+            data2,
+            file_offset: file_size,
+        };
     }
 
     /// Does not escape any characters
     pub fn store(&mut self, key: u32, value: u32) {
         self.data.insert(key, value);
         let row = format!("{},{}\n", key, value);
-        self.store.write_all(row.as_bytes()).unwrap();
+        let bytes = row.as_bytes();
+        let row_size = row.as_bytes().len();
+        self.store.write_all(bytes).unwrap();
+        self.file_offset += row_size;
     }
 
     pub fn get(&self, key: &u32) -> Option<&u32> {
@@ -124,5 +143,17 @@ mod tests {
 
         assert_eq!(store.get(&deleted_test_key), None);
         assert_eq!(store.get(&other_test_key), Some(&2000));
+    }
+
+    #[test]
+    fn it_keeps_track_of_file_offset() {
+        // Kinda implementation detail tbh
+        let test_filename = TEMP_TEST_FILE_DIR.to_string() + "fileoffset.kv";
+        let mut store = Store::new(Some(&test_filename), false);
+        assert_eq!(store.file_offset, 0);
+        store.store(1, 2);
+        let key_and_value_size_in_bytes = 4; // key is a byte, val is a byte, comma takes a byte,
+                                             // newline takes a byte
+        assert_eq!(store.file_offset, key_and_value_size_in_bytes);
     }
 }
