@@ -3,19 +3,28 @@ use std::{
     collections::HashMap,
     fs::{self, File},
     io::{Read, Seek, Write},
+    os::unix::prelude::FileExt,
 };
 
 type FileOffset = usize;
 
 const DEFAULT_STORE_FILENAME: &str = "store.kv";
+
 pub struct Store {
     store: File,
     // NOTE: TODO: Our naive approach here of just storing stuff in a hashmap doesn't allow us to
     // have arbitrary values
     data: HashMap<u32, u32>,
 
-    data2: HashMap<u32, FileOffset>,
+    data2: HashMap<u32, Entry>,
     file_offset: usize,
+}
+
+#[derive(Debug, PartialEq)]
+struct Entry {
+    value_size: usize,
+    key_size: usize,
+    byte_offset_for_key: FileOffset,
 }
 
 impl Store {
@@ -55,13 +64,40 @@ impl Store {
         let row = format!("{},{}\n", key, value);
         let bytes = row.as_bytes();
         let row_size = row.as_bytes().len();
+        // TODO: Make sure this ALWAYS appends and doesn't just write wherever
         self.store.write_all(bytes).unwrap();
-        self.data2.insert(key, self.file_offset);
+        let value_str = value.to_string();
+        let key_str = key.to_string();
+        // TODO: calculate size of the value once we go generic
+        let entry = Entry {
+            value_size: value_str.len(),
+            key_size: key_str.len(),
+            byte_offset_for_key: self.file_offset,
+        };
+        self.data2.insert(key, entry);
         self.file_offset += row_size;
     }
 
     pub fn get(&self, key: &u32) -> Option<&u32> {
         return self.data.get(key);
+    }
+
+    pub fn get2(&mut self, key: &u32) -> Option<Vec<u8>> {
+        // TODO: Handle this unwrap
+        let entry = self.data2.get(key).unwrap();
+        let mut buffer: Vec<u8> = vec![0; entry.value_size];
+
+        let seperator_byte_size = 1;
+        let value_offset_in_file =
+            entry.byte_offset_for_key + entry.key_size + seperator_byte_size; // - 1 since we
+        // start at 0
+        // We're storing the key offset, so need to skip over the size of the key, and the size of
+        // the separator ","
+
+        self.store
+            .read_exact_at(&mut buffer, value_offset_in_file as u64)
+            .unwrap();
+        return Some(buffer);
     }
 
     fn build_store_from_file(file: &mut File) -> HashMap<u32, u32> {
@@ -147,19 +183,20 @@ mod tests {
     }
 
     #[test]
-    fn it_keeps_track_of_file_offset() {
-        // Kinda implementation detail tbh
-        let test_filename = TEMP_TEST_FILE_DIR.to_string() + "fileoffset.kv";
+    fn it_stores_and_retrieves_using_entries() {
+        let test_filename = TEMP_TEST_FILE_DIR.to_string() + "entries-store.kv";
         let mut store = Store::new(Some(&test_filename), false);
         assert_eq!(store.file_offset, 0);
         let key = 1;
-        store.store(key, 2);
-        let expected_file_offset = 4; // key is a byte, val is a byte, comma takes a byte,
-                                      // newline takes a byte
-        assert_eq!(store.file_offset, expected_file_offset);
-        let previous_file_offset = store.file_offset;
-        assert_eq!(*store.data2.get(&key).unwrap(), 0);
-        store.store(key, 2);
-        assert_eq!(*store.data2.get(&key).unwrap(), previous_file_offset)
+        let value = 2;
+        store.store(key, value);
+
+        let bytes = store.get2(&key).unwrap();
+        assert_eq!(bytes, value.to_string().as_bytes());
+        let key = 500;
+        let value = 5000000;
+        store.store(key, value);
+        let bytes = store.get2(&key).unwrap();
+        assert_eq!(bytes, value.to_string().as_bytes());
     }
 }
