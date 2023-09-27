@@ -52,17 +52,18 @@ impl Store {
     }
 
     /// Does not escape any characters
-    pub fn put(&mut self, key: u32, value: u32) {
+    pub fn put(&mut self, key: u32, value: &str) {
+        // The plan is for now: We store string, and we read string. That is it. Users can serialize
+        // and deserialize as needed.
         let row = format!("{},{}\n", key, value);
         let bytes = row.as_bytes();
         let row_size = row.as_bytes().len();
         // TODO: Make sure this ALWAYS appends and doesn't just write wherever
         self.store.write_all(bytes).unwrap();
-        let value_str = value.to_string();
         let key_str = key.to_string();
         // TODO: calculate size of the value once we go generic
         let entry = Entry {
-            value_size: value_str.len(),
+            value_size: value.len(),
             key_size: key_str.len(),
             byte_offset_for_key: self.file_offset,
         };
@@ -153,12 +154,12 @@ mod tests {
         let test_key = 50;
         assert_eq!(store.get(&test_key), None);
 
-        store.put(test_key, 100);
+        store.put(test_key, "100");
         assert_eq!(store.get(&test_key).unwrap(), 100.to_string().as_bytes());
-        store.put(test_key, 101);
+        store.put(test_key, "101");
         assert_eq!(store.get(&test_key).unwrap(), 101.to_string().as_bytes());
 
-        store.put(test_key + 1, 101);
+        store.put(test_key + 1, "101");
         assert_eq!(
             store.get(&(test_key + 1)).unwrap(),
             101.to_string().as_bytes()
@@ -170,7 +171,7 @@ mod tests {
         let test_filename = TEMP_TEST_FILE_DIR.to_string() + "deletes.kv";
         let mut store = Store::new(Some(&test_filename), false);
         let test_key = 50;
-        store.put(test_key, 100);
+        store.put(test_key, "100");
 
         store.remove(test_key);
         assert_eq!(store.get(&test_key), None);
@@ -182,12 +183,12 @@ mod tests {
         let mut store = Store::new(Some(&test_filename), false);
         let deleted_test_key = 50;
         let other_test_key = 999;
-        store.put(deleted_test_key, 100);
+        store.put(deleted_test_key, "100");
         store.remove(deleted_test_key);
 
-        store.put(other_test_key, 1000);
+        store.put(other_test_key, "1000");
         store.remove(other_test_key);
-        store.put(other_test_key, 2000);
+        store.put(other_test_key, "2000");
 
         let mut store = Store::new(Some(&test_filename), true);
 
@@ -204,13 +205,13 @@ mod tests {
         let mut store = Store::new(Some(&test_filename), false);
         assert_eq!(store.file_offset, 0);
         let key = 1;
-        let value = 2;
+        let value = "2";
         store.put(key, value);
 
         let bytes = store.get(&key).unwrap();
         assert_eq!(bytes, value.to_string().as_bytes());
         let key = 500;
-        let value = 5000000;
+        let value = "5000000";
         store.put(key, value);
         let bytes = store.get(&key).unwrap();
         assert_eq!(bytes, value.to_string().as_bytes());
