@@ -2,7 +2,7 @@
 use std::{
     collections::HashMap,
     fs::{self, File},
-    io::{Read, Seek, Write},
+    io::{BufWriter, Read, Seek, Write},
     os::unix::prelude::FileExt,
 };
 
@@ -11,7 +11,8 @@ type FileOffset = usize;
 const DEFAULT_STORE_FILENAME: &str = "store.kv";
 
 pub struct Store {
-    store: File,
+    writer: BufWriter<File>,
+    reader: File,
     data: HashMap<u32, Entry>,
     file_offset: usize,
 }
@@ -44,31 +45,40 @@ impl Store {
         let file_size = file.metadata().unwrap().len() as usize;
         let data = Store::build_store_from_file(&mut file);
 
+        let writer = BufWriter::new(file.try_clone().unwrap());
+
         return Store {
-            store: file,
+            writer,
+            reader: file,
             data,
             file_offset: file_size,
         };
     }
 
-    /// Does not escape any characters
-    pub fn put(&mut self, key: u32, value: &str) {
-        // The plan is for now: We store string, and we read string. That is it. Users can serialize
-        // and deserialize as needed.
-        let row = format!("{},{}\n", key, value);
-        let bytes = row.as_bytes();
-        let row_size = row.as_bytes().len();
+    // Stores value with key. User is responsible for serializing/deserializing
+    pub fn put(&mut self, key: u32, value: &[u8]) {
+        // TODO: Make key a byte slice as well
+
+        let key_and_sep = format!("{},", key);
+
+        let bytes = key_and_sep.as_bytes();
+        let key_and_sep_size = key_and_sep.as_bytes().len();
         // TODO: Make sure this ALWAYS appends and doesn't just write wherever
-        self.store.write_all(bytes).unwrap();
+        self.writer.write_all(bytes).unwrap();
+        self.writer.write_all(value).unwrap();
+        self.writer.write_all("\n".as_bytes()).unwrap();
+        self.writer.flush().unwrap();
         let key_str = key.to_string();
-        // TODO: calculate size of the value once we go generic
         let entry = Entry {
+            // TODO: Start storing what file the entry is stored in, so we can have separate files
+            // for compaction
             value_size: value.len(),
             key_size: key_str.len(),
             byte_offset_for_key: self.file_offset,
         };
         self.data.insert(key, entry);
-        self.file_offset += row_size;
+        let newline_size = 1;
+        self.file_offset += key_and_sep_size + value.len() + newline_size;
     }
 
     pub fn get(&mut self, key: &u32) -> Option<Vec<u8>> {
@@ -82,7 +92,9 @@ impl Store {
                                                                                                      // We're storing the key offset, so need to skip over the size of the key, and the size of
                                                                                                      // the separator ","
 
-        self.store
+        // TODO: Might just need to open the file we get from the Entry value here for reading.
+        // Don't think we can keep the files open constantly
+        self.reader
             .read_exact_at(&mut buffer, value_offset_in_file as u64)
             .unwrap();
         if buffer.is_empty() {
@@ -101,6 +113,8 @@ impl Store {
         file.rewind().unwrap();
         file.read_to_string(&mut buffer).unwrap();
         let mut byte_offset = 0;
+        // SPEEDUP: Store the size of the key + values so we don't need to parse them, we can just
+        // read as raw bytes
         for line in buffer.lines() {
             let splits: Vec<_> = line.split_terminator(",").collect();
             let key_size = splits[0].len();
@@ -129,7 +143,7 @@ impl Store {
         // TODO: Cleanup duplication with regular "store" method"
         let bytes = row.as_bytes();
         let row_size = row.as_bytes().len();
-        self.store.write_all(bytes).unwrap();
+        self.writer.write_all(bytes).unwrap();
         let key_str = key.to_string();
         let entry = Entry {
             value_size: 0,
@@ -154,12 +168,12 @@ mod tests {
         let test_key = 50;
         assert_eq!(store.get(&test_key), None);
 
-        store.put(test_key, "100");
+        store.put(test_key, "100".as_bytes());
         assert_eq!(store.get(&test_key).unwrap(), 100.to_string().as_bytes());
-        store.put(test_key, "101");
+        store.put(test_key, "101".as_bytes());
         assert_eq!(store.get(&test_key).unwrap(), 101.to_string().as_bytes());
 
-        store.put(test_key + 1, "101");
+        store.put(test_key + 1, "101".as_bytes());
         assert_eq!(
             store.get(&(test_key + 1)).unwrap(),
             101.to_string().as_bytes()
@@ -171,7 +185,7 @@ mod tests {
         let test_filename = TEMP_TEST_FILE_DIR.to_string() + "deletes.kv";
         let mut store = Store::new(Some(&test_filename), false);
         let test_key = 50;
-        store.put(test_key, "100");
+        store.put(test_key, "100".as_bytes());
 
         store.remove(test_key);
         assert_eq!(store.get(&test_key), None);
@@ -183,12 +197,12 @@ mod tests {
         let mut store = Store::new(Some(&test_filename), false);
         let deleted_test_key = 50;
         let other_test_key = 999;
-        store.put(deleted_test_key, "100");
+        store.put(deleted_test_key, "100".as_bytes());
         store.remove(deleted_test_key);
 
-        store.put(other_test_key, "1000");
+        store.put(other_test_key, "1000".as_bytes());
         store.remove(other_test_key);
-        store.put(other_test_key, "2000");
+        store.put(other_test_key, "2000".as_bytes());
 
         let mut store = Store::new(Some(&test_filename), true);
 
@@ -205,16 +219,16 @@ mod tests {
         let mut store = Store::new(Some(&test_filename), false);
         assert_eq!(store.file_offset, 0);
         let key = 1;
-        let value = "2";
+        let value = "2".as_bytes();
         store.put(key, value);
 
         let bytes = store.get(&key).unwrap();
-        assert_eq!(bytes, value.to_string().as_bytes());
+        assert_eq!(bytes, value);
         let key = 500;
-        let value = "5000000";
+        let value = "5000000".as_bytes();
         store.put(key, value);
         let bytes = store.get(&key).unwrap();
-        assert_eq!(bytes, value.to_string().as_bytes());
+        assert_eq!(bytes, value);
     }
     // TODO: Some tombstone tests
 }

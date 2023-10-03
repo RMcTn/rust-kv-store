@@ -5,7 +5,7 @@ fn main() {
     let mut store = Store::new(None, true);
 
     for i in 0..=1000000 {
-        store.put(i, &(i + 1).to_string());
+        store.put(i, &(i + 1).to_string().as_bytes());
     }
 }
 
@@ -37,13 +37,13 @@ mod tests {
 
         let mut store = Store::new(Some(&test_filename), false);
         let key = 1;
-        store.put(key, &json);
+        store.put(key, &json.as_bytes());
 
         for i in 5..10 {
-            store.put(i, "Some stuff here and that");
+            store.put(i, "Some stuff here and that".as_bytes());
         }
 
-        store.put(key, &json);
+        store.put(key, &json.as_bytes());
 
         let bytes = store.get(&key).unwrap();
         let stored_json = std::str::from_utf8(&bytes).unwrap();
