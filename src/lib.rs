@@ -4,11 +4,12 @@ use std::{
     fs::{self, File},
     io::{BufWriter, Read, Seek, Write},
     os::unix::prelude::FileExt,
+    path::Path,
 };
 
 type FileOffset = usize;
 
-const DEFAULT_STORE_FILENAME: &str = "store.kv";
+const STORE_FILENAME_SUFFIX: &str = ".store.kv";
 
 pub struct Store {
     writer: BufWriter<File>,
@@ -25,13 +26,18 @@ struct Entry {
 }
 
 impl Store {
-    pub fn new(filename: Option<&str>, keep_existing_file: bool) -> Self {
+    pub fn new(dir_path: &Path, keep_existing_file: bool) -> Self {
+        fs::create_dir_all(&dir_path).unwrap();
+        let filename = "1".to_string() + STORE_FILENAME_SUFFIX;
+        let mut file_path = dir_path.to_path_buf();
+        file_path.push(&filename);
+
         let mut file = if keep_existing_file {
             fs::File::options()
                 .append(true)
                 .create(true)
                 .read(true)
-                .open(filename.unwrap_or(DEFAULT_STORE_FILENAME))
+                .open(&file_path)
                 .unwrap()
         } else {
             fs::File::options()
@@ -39,7 +45,7 @@ impl Store {
                 .read(true)
                 .write(true)
                 .truncate(true)
-                .open(filename.unwrap_or(DEFAULT_STORE_FILENAME))
+                .open(&file_path)
                 .unwrap()
         };
         let file_size = file.metadata().unwrap().len() as usize;
@@ -58,6 +64,17 @@ impl Store {
     // Stores value with key. User is responsible for serializing/deserializing
     pub fn put(&mut self, key: u32, value: &[u8]) {
         // TODO: Make key a byte slice as well
+
+        // TODO: Going to change it from providing a filename for the store to providing a
+        // directory for the store. We can then keep a incrementing counter for file id that is
+        // used for filenames too (inside that dir anyway)
+        // Steps here:
+        // Have keystore load from a directory (we'll default a file name for now). - DONE
+        // Name file with incrementing file id prefix.
+        // Start writing multiple files after some "limit" is passed for each file (say 5 writes
+        // for testing or something).
+        // Load up multiple files in the store dir (latest file id will be from counting)
+        // Compaction + Merging
 
         let key_and_sep = format!("{},", key);
 
@@ -106,6 +123,7 @@ impl Store {
     }
 
     fn build_store_from_file(file: &mut File) -> HashMap<u32, Entry> {
+        // TODO: Build store from files
         let mut data = HashMap::new();
         // Go through the entire file
         let mut buffer = String::new();
@@ -163,8 +181,8 @@ mod tests {
 
     #[test]
     fn it_stores_and_retreives() {
-        let test_filename = TEMP_TEST_FILE_DIR.to_string() + "stores_and_retrieves.kv";
-        let mut store = Store::new(Some(&test_filename), false);
+        let test_dir = TEMP_TEST_FILE_DIR.to_string() + "stores_and_retrieves";
+        let mut store = Store::new(Path::new(&test_dir), false);
         let test_key = 50;
         assert_eq!(store.get(&test_key), None);
 
@@ -182,8 +200,8 @@ mod tests {
 
     #[test]
     fn it_deletes() {
-        let test_filename = TEMP_TEST_FILE_DIR.to_string() + "deletes.kv";
-        let mut store = Store::new(Some(&test_filename), false);
+        let test_dir = TEMP_TEST_FILE_DIR.to_string() + "deletes";
+        let mut store = Store::new(Path::new(&test_dir), false);
         let test_key = 50;
         store.put(test_key, "100".as_bytes());
 
@@ -193,8 +211,8 @@ mod tests {
 
     #[test]
     fn it_persists() {
-        let test_filename = TEMP_TEST_FILE_DIR.to_string() + "persists.kv";
-        let mut store = Store::new(Some(&test_filename), false);
+        let test_dir = TEMP_TEST_FILE_DIR.to_string() + "persists";
+        let mut store = Store::new(Path::new(&test_dir), false);
         let deleted_test_key = 50;
         let other_test_key = 999;
         store.put(deleted_test_key, "100".as_bytes());
@@ -204,7 +222,7 @@ mod tests {
         store.remove(other_test_key);
         store.put(other_test_key, "2000".as_bytes());
 
-        let mut store = Store::new(Some(&test_filename), true);
+        let mut store = Store::new(Path::new(&test_dir), true);
 
         assert_eq!(store.get(&deleted_test_key), None);
         let val = store.get(&other_test_key).unwrap();
@@ -215,8 +233,8 @@ mod tests {
 
     #[test]
     fn it_stores_and_retrieves_using_entries() {
-        let test_filename = TEMP_TEST_FILE_DIR.to_string() + "entries-store.kv";
-        let mut store = Store::new(Some(&test_filename), false);
+        let test_dir = TEMP_TEST_FILE_DIR.to_string() + "entries-store";
+        let mut store = Store::new(Path::new(&test_dir), false);
         assert_eq!(store.file_offset, 0);
         let key = 1;
         let value = "2".as_bytes();
