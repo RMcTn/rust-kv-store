@@ -146,7 +146,7 @@ impl Store {
 
         // TODO: Might just need to open the file we get from the Entry value here for reading.
         // Don't think we can keep the files open constantly
-        self.read_from_store_file(&mut buffer, value_offset_in_file as u64);
+        self.read_from_store_file(entry.file_id, &mut buffer, value_offset_in_file as u64);
         if buffer.is_empty() {
             // Is there a valid use case for having an empty value for a key? Assuming it is
             // the tombstone for now
@@ -155,8 +155,8 @@ impl Store {
         return Some(buffer);
     }
 
-    fn read_from_store_file(&self, buffer: &mut [u8], offset: u64) {
-        let path = Self::file_path_for_file_id(self.current_file_id, &self.dir);
+    fn read_from_store_file(&self, file_id: u64, buffer: &mut [u8], offset: u64) {
+        let path = Self::file_path_for_file_id(file_id, &self.dir);
         let file = File::open(path).unwrap();
         file.read_exact_at(buffer, offset as u64).unwrap();
     }
@@ -307,6 +307,23 @@ mod tests {
         assert_eq!(store.current_file_id, 2);
         let files: Vec<_> = fs::read_dir(test_dir).unwrap().collect();
         assert_eq!(files.len(), 2);
+    }
+
+    #[test]
+    fn it_reads_from_across_files() {
+        let test_dir = TEMP_TEST_FILE_DIR.to_string() + "mutliple-files-reading";
+        let mut store = Store::new(Path::new(&test_dir), false);
+        store.file_size_limit_in_bytes = 1;
+        assert_eq!(store.current_file_id, 1);
+
+        let test_value = "10".as_bytes();
+        store.put(1, test_value);
+        store.put(2, "20".as_bytes());
+        store.put(3, "30".as_bytes());
+
+        let result = store.get(&1).unwrap();
+
+        assert_eq!(result, test_value);
     }
     // TODO: Some tombstone tests
 }
