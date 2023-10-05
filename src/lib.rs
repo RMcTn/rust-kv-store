@@ -13,7 +13,6 @@ const STORE_FILENAME_SUFFIX: &str = ".store.kv";
 
 pub struct Store {
     writer: BufWriter<File>,
-    reader: File,
     data: HashMap<u32, Entry>,
     file_offset: usize,
     current_file_id: u64,
@@ -41,7 +40,6 @@ impl Store {
         let file_size = file.metadata().unwrap().len() as usize;
         return Store {
             writer,
-            reader: file,
             data,
             file_offset: file_size,
             current_file_id: file_id,
@@ -95,11 +93,16 @@ impl Store {
         self.file_offset += key_and_sep_size + value.len() + newline_size;
     }
 
-    fn create_store_file(file_id: u64, dir_path: &Path, keep_existing_file: bool) -> File {
-        // TODO: Return errors
+    fn file_path_for_file_id(file_id: u64, dir_path: &Path) -> PathBuf {
         let filename = file_id.to_string() + STORE_FILENAME_SUFFIX;
         let mut file_path = dir_path.to_path_buf();
         file_path.push(&filename);
+        return file_path;
+    }
+
+    fn create_store_file(file_id: u64, dir_path: &Path, keep_existing_file: bool) -> File {
+        // TODO: Return errors
+        let file_path = Self::file_path_for_file_id(file_id, dir_path);
 
         // TODO: Remove this keep existing file flag. Should be an option for the dir of the store,
         // rather than each file. Using existing file should only matter when loading up an
@@ -140,15 +143,19 @@ impl Store {
 
         // TODO: Might just need to open the file we get from the Entry value here for reading.
         // Don't think we can keep the files open constantly
-        self.reader
-            .read_exact_at(&mut buffer, value_offset_in_file as u64)
-            .unwrap();
+        self.read_from_store_file(&mut buffer, value_offset_in_file as u64);
         if buffer.is_empty() {
             // Is there a valid use case for having an empty value for a key? Assuming it is
             // the tombstone for now
             return None;
         }
         return Some(buffer);
+    }
+
+    fn read_from_store_file(&self, buffer: &mut [u8], offset: u64) {
+        let path = Self::file_path_for_file_id(self.current_file_id, &self.dir);
+        let file = File::open(path).unwrap();
+        file.read_exact_at(buffer, offset as u64).unwrap();
     }
 
     fn build_store_from_file(file: &mut File) -> HashMap<u32, Entry> {
