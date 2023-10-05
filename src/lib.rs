@@ -25,6 +25,7 @@ struct Entry {
     value_size: usize,
     key_size: usize,
     byte_offset_for_key: FileOffset,
+    file_id: u64,
 }
 
 impl Store {
@@ -85,11 +86,10 @@ impl Store {
         self.writer.flush().unwrap();
         let key_str = key.to_string();
         let entry = Entry {
-            // TODO: Start storing what file the entry is stored in, so we can have separate files
-            // for compaction
             value_size: value.len(),
             key_size: key_str.len(),
             byte_offset_for_key: self.file_offset,
+            file_id: self.current_file_id,
         };
         self.data.insert(key, entry);
         let newline_size = 1;
@@ -187,6 +187,8 @@ impl Store {
                 value_size,
                 key_size,
                 byte_offset_for_key: byte_offset,
+                file_id: 1, // TODO: Assuming 1 for now, but need to get this from the file we read
+                            // it from
             };
             byte_offset += line.len() + 1; // 1 for newline
             data.insert(key, entry);
@@ -206,6 +208,7 @@ impl Store {
             value_size: 0,
             key_size: key_str.len(),
             byte_offset_for_key: self.file_offset,
+            file_id: self.current_file_id,
         };
         self.data.insert(key, entry);
         self.file_offset += row_size;
