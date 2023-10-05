@@ -18,6 +18,7 @@ pub struct Store {
     file_offset: usize,
     current_file_id: u64,
     dir: PathBuf,
+    file_size_limit_in_bytes: u64,
 }
 
 #[derive(Debug, PartialEq)]
@@ -45,6 +46,7 @@ impl Store {
             file_offset: file_size,
             current_file_id: file_id,
             dir: dir_path.to_path_buf(),
+            file_size_limit_in_bytes: 5000,
         };
     }
 
@@ -63,6 +65,14 @@ impl Store {
         // Load up multiple files in the store dir (latest file id will be from counting)
         // Compaction + Merging
 
+        if self.file_offset as u64 >= self.file_size_limit_in_bytes {
+            // NOTE: TODO: The file size limit can be surpassed if the values/keys we write are
+            //  large enough, since we don't do the file limit check before the offending key/value
+            //  is written.
+            self.increment_file_id();
+            Self::create_store_file(self.current_file_id, &self.dir, false);
+            // TODO: Do the other housekeeping
+        }
         let key_and_sep = format!("{},", key);
 
         let bytes = key_and_sep.as_bytes();
@@ -86,6 +96,7 @@ impl Store {
     }
 
     fn create_store_file(file_id: u64, dir_path: &Path, keep_existing_file: bool) -> File {
+        // TODO: Return errors
         let filename = file_id.to_string() + STORE_FILENAME_SUFFIX;
         let mut file_path = dir_path.to_path_buf();
         file_path.push(&filename);
@@ -93,7 +104,7 @@ impl Store {
         // TODO: Remove this keep existing file flag. Should be an option for the dir of the store,
         // rather than each file. Using existing file should only matter when loading up an
         // exisitng store on startup.
-        let mut file = if keep_existing_file {
+        let file = if keep_existing_file {
             fs::File::options()
                 .append(true)
                 .create(true)
@@ -265,6 +276,24 @@ mod tests {
         store.put(key, value);
         let bytes = store.get(&key).unwrap();
         assert_eq!(bytes, value);
+    }
+
+    #[test]
+    fn it_creates_a_new_file_after_crossing_filesize_limit() {
+        let test_dir = TEMP_TEST_FILE_DIR.to_string() + "mutliple-files";
+        let mut store = Store::new(Path::new(&test_dir), false);
+        store.file_size_limit_in_bytes = 1;
+        assert_eq!(store.current_file_id, 1);
+        let key = 1;
+        let value = "2".as_bytes();
+        store.put(key, value);
+
+        let key = 500;
+        let value = "5000000".as_bytes();
+        store.put(key, value);
+        assert_eq!(store.current_file_id, 2);
+        let files: Vec<_> = fs::read_dir(test_dir).unwrap().collect();
+        assert_eq!(files.len(), 2);
     }
     // TODO: Some tombstone tests
 }
