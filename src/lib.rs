@@ -60,6 +60,7 @@ impl Store {
         // Name file with incrementing file id prefix.
         // Start writing multiple files after some "limit" is passed for each file (say 5 writes
         // for testing or something).
+        // Store the file ID with the entry.
         // Load up multiple files in the store dir (latest file id will be from counting)
         // Compaction + Merging
 
@@ -68,8 +69,10 @@ impl Store {
             //  large enough, since we don't do the file limit check before the offending key/value
             //  is written.
             self.increment_file_id();
-            Self::create_store_file(self.current_file_id, &self.dir, false);
-            // TODO: Do the other housekeeping
+            let new_file = Self::create_store_file(self.current_file_id, &self.dir, false);
+            let writer = BufWriter::new(new_file);
+            self.writer = writer;
+            self.file_offset = 0;
         }
         let key_and_sep = format!("{},", key);
 
