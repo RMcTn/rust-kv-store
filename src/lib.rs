@@ -4,7 +4,7 @@ use std::{
     fs::{self, File},
     io::{BufWriter, Read, Seek, Write},
     os::unix::prelude::FileExt,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 type FileOffset = usize;
@@ -16,6 +16,8 @@ pub struct Store {
     reader: File,
     data: HashMap<u32, Entry>,
     file_offset: usize,
+    current_file_id: u64,
+    dir: PathBuf,
 }
 
 #[derive(Debug, PartialEq)]
@@ -27,37 +29,22 @@ struct Entry {
 
 impl Store {
     pub fn new(dir_path: &Path, keep_existing_file: bool) -> Self {
-        fs::create_dir_all(&dir_path).unwrap();
-        let filename = "1".to_string() + STORE_FILENAME_SUFFIX;
-        let mut file_path = dir_path.to_path_buf();
-        file_path.push(&filename);
+        let file_id = 1;
+        // TODO: Enumerate existing files to find latest file_id
+        fs::create_dir_all(dir_path).unwrap();
 
-        let mut file = if keep_existing_file {
-            fs::File::options()
-                .append(true)
-                .create(true)
-                .read(true)
-                .open(&file_path)
-                .unwrap()
-        } else {
-            fs::File::options()
-                .create(true)
-                .read(true)
-                .write(true)
-                .truncate(true)
-                .open(&file_path)
-                .unwrap()
-        };
-        let file_size = file.metadata().unwrap().len() as usize;
+        let mut file = Self::create_store_file(file_id, &dir_path, keep_existing_file);
         let data = Store::build_store_from_file(&mut file);
-
         let writer = BufWriter::new(file.try_clone().unwrap());
 
+        let file_size = file.metadata().unwrap().len() as usize;
         return Store {
             writer,
             reader: file,
             data,
             file_offset: file_size,
+            current_file_id: file_id,
+            dir: dir_path.to_path_buf(),
         };
     }
 
@@ -96,6 +83,37 @@ impl Store {
         self.data.insert(key, entry);
         let newline_size = 1;
         self.file_offset += key_and_sep_size + value.len() + newline_size;
+    }
+
+    fn create_store_file(file_id: u64, dir_path: &Path, keep_existing_file: bool) -> File {
+        let filename = file_id.to_string() + STORE_FILENAME_SUFFIX;
+        let mut file_path = dir_path.to_path_buf();
+        file_path.push(&filename);
+
+        // TODO: Remove this keep existing file flag. Should be an option for the dir of the store,
+        // rather than each file. Using existing file should only matter when loading up an
+        // exisitng store on startup.
+        let mut file = if keep_existing_file {
+            fs::File::options()
+                .append(true)
+                .create(true)
+                .read(true)
+                .open(&file_path)
+                .unwrap()
+        } else {
+            fs::File::options()
+                .create(true)
+                .read(true)
+                .write(true)
+                .truncate(true)
+                .open(&file_path)
+                .unwrap()
+        };
+        return file;
+    }
+
+    fn increment_file_id(&mut self) {
+        self.current_file_id += 1;
     }
 
     pub fn get(&mut self, key: &u32) -> Option<Vec<u8>> {
