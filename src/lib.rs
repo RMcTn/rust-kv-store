@@ -2,7 +2,7 @@
 use std::{
     collections::HashMap,
     fs::{self, File},
-    io::{BufWriter, Read, Seek, Write},
+    io::{BufWriter, Read, Write},
     os::unix::prelude::FileExt,
     path::{Path, PathBuf},
 };
@@ -34,16 +34,18 @@ impl Store {
         // TODO: Enumerate existing files to find latest file_id
         fs::create_dir_all(dir_path).unwrap();
 
-        let mut file = Self::create_store_file(file_id, &dir_path, keep_existing_file);
-        let data = Store::build_store_from_file(&mut file);
+        let file = Self::create_store_file(file_id, &dir_path, keep_existing_file);
+        // TODO: Option to wipe the whole dir AKA a fresh new store
+        let store_info = Store::build_store_from_dir(dir_path);
+
         let writer = BufWriter::new(file.try_clone().unwrap());
 
         let file_size = file.metadata().unwrap().len() as usize;
         return Store {
             writer,
-            data,
+            data: store_info.0,
             file_offset: file_size,
-            current_file_id: file_id,
+            current_file_id: store_info.1,
             dir: dir_path.to_path_buf(),
             file_size_limit_in_bytes: 5000,
         };
@@ -58,10 +60,10 @@ impl Store {
         // used for filenames too (inside that dir anyway)
         // Steps here:
         // Have keystore load from a directory (we'll default a file name for now). - DONE
-        // Name file with incrementing file id prefix.
+        // Name file with incrementing file id prefix. - DONE.
         // Start writing multiple files after some "limit" is passed for each file (say 5 writes
-        // for testing or something).
-        // Store the file ID with the entry.
+        // for testing or something). - DONE.
+        // Store the file ID with the entry. - DONE.
         // Load up multiple files in the store dir (latest file id will be from counting)
         // Compaction + Merging
 
@@ -161,43 +163,10 @@ impl Store {
         file.read_exact_at(buffer, offset as u64).unwrap();
     }
 
-    fn build_store_from_file(file: &mut File) -> HashMap<u32, Entry> {
-        // TODO: Build store from files
-        let mut data = HashMap::new();
-        // Go through the entire file
-        let mut buffer = String::new();
-        // Need to rewind back before any writes until we only read file on startup
-        file.rewind().unwrap();
-        file.read_to_string(&mut buffer).unwrap();
-        let mut byte_offset = 0;
-        // SPEEDUP: Store the size of the key + values so we don't need to parse them, we can just
-        // read as raw bytes
-        for line in buffer.lines() {
-            let splits: Vec<_> = line.split_terminator(",").collect();
-            let key_size = splits[0].len();
-            let key: u32 = splits[0].parse().unwrap();
-            let value_size = if splits.len() == 1 {
-                // Assume our tombstone is just "nothing" after a comma for now(?)
-                0
-            } else {
-                splits[1].len()
-            };
-            // debug_assert_eq!(splits.len(), 2);
-            let entry = Entry {
-                value_size,
-                key_size,
-                byte_offset_for_key: byte_offset,
-                file_id: 1, // TODO: Assuming 1 for now, but need to get this from the file we read
-                            // it from
-            };
-            byte_offset += line.len() + 1; // 1 for newline
-            data.insert(key, entry);
-        }
-        return data;
-    }
-
     pub fn remove(&mut self, key: u32) {
-        // No value after key is our "tombstone" for now
+        // No value after key is our "tombstone" for now - Not a great idea if we ever wanted to
+        // checksum rows for corruption/crash recovery. No value = No bytes = Nothing to use as a
+        // tombstone checksum
         let row = format!("{},\n", key);
         // TODO: Cleanup duplication with regular "store" method"
         let bytes = row.as_bytes();
@@ -212,6 +181,59 @@ impl Store {
         };
         self.data.insert(key, entry);
         self.file_offset += row_size;
+    }
+
+    // TODO: This name feels a bit misleading since it's just the "data" we're building up
+    fn build_store_from_dir(dir_path: &Path) -> (HashMap<u32, Entry>, u64) {
+        // TODO: Test for this!
+        let mut entries = fs::read_dir(dir_path)
+            .unwrap()
+            .map(|res| res.map(|e| e.path()))
+            .collect::<Result<Vec<_>, std::io::Error>>()
+            .unwrap();
+
+        entries.sort();
+        // TODO: Assuming that the directory only holds good data, and no bad files (such as
+        // malformed file names).
+
+        let mut data = HashMap::new();
+        let mut highest_file_id = 1;
+        for entry in entries {
+            let filename = entry.strip_prefix(dir_path).unwrap();
+            let filename = filename.to_str().unwrap();
+            let filename_sections: Vec<_> = filename.split(".").collect();
+            let current_file_id = filename_sections[0].parse().unwrap();
+            if current_file_id > highest_file_id {
+                // This feels like an unnecessary check since the files should be sorted, but
+                // better safe than sorry
+                highest_file_id = current_file_id;
+            }
+            let mut file = File::open(entry).unwrap();
+            let mut buffer = String::new();
+            file.read_to_string(&mut buffer).unwrap();
+            let mut byte_offset = 0;
+
+            for line in buffer.lines() {
+                let splits: Vec<_> = line.split_terminator(",").collect();
+                let key_size = splits[0].len();
+                let key: u32 = splits[0].parse().unwrap();
+                let value_size = if splits.len() == 1 {
+                    // Assume our tombstone is just "nothing" after a comma for now(?)
+                    0
+                } else {
+                    splits[1].len()
+                };
+                let entry = Entry {
+                    value_size,
+                    key_size,
+                    byte_offset_for_key: byte_offset,
+                    file_id: current_file_id,
+                };
+                byte_offset += line.len() + 1; // 1 for newline
+                data.insert(key, entry);
+            }
+        }
+        return (data, highest_file_id);
     }
 }
 
@@ -293,6 +315,8 @@ mod tests {
 
     #[test]
     fn it_creates_a_new_file_after_crossing_filesize_limit() {
+        // TODO: FIXME: We need to wipe the test dir when running tests. Old data is fucking shit
+        // up. Could do a wipe dir option for the store::new method?
         let test_dir = TEMP_TEST_FILE_DIR.to_string() + "mutliple-files";
         let mut store = Store::new(Path::new(&test_dir), false);
         store.file_size_limit_in_bytes = 1;
