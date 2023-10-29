@@ -29,13 +29,17 @@ struct Entry {
 }
 
 impl Store {
-    pub fn new(dir_path: &Path, keep_existing_file: bool) -> Self {
+    pub fn new(dir_path: &Path, keep_existing_file: bool, keep_existing_dir: bool) -> Self {
+        if !keep_existing_dir {
+            fs::remove_dir_all(dir_path).unwrap();
+        }
         let file_id = 1;
         // TODO: Enumerate existing files to find latest file_id
         fs::create_dir_all(dir_path).unwrap();
 
         let file = Self::create_store_file(file_id, &dir_path, keep_existing_file);
         // TODO: Option to wipe the whole dir AKA a fresh new store
+
         let store_info = Store::build_store_from_dir(dir_path);
 
         let writer = BufWriter::new(file.try_clone().unwrap());
@@ -246,7 +250,7 @@ mod tests {
     #[test]
     fn it_stores_and_retreives() {
         let test_dir = TEMP_TEST_FILE_DIR.to_string() + "stores_and_retrieves";
-        let mut store = Store::new(Path::new(&test_dir), false);
+        let mut store = Store::new(Path::new(&test_dir), false, false);
         let test_key = 50;
         assert_eq!(store.get(&test_key), None);
 
@@ -265,7 +269,7 @@ mod tests {
     #[test]
     fn it_deletes() {
         let test_dir = TEMP_TEST_FILE_DIR.to_string() + "deletes";
-        let mut store = Store::new(Path::new(&test_dir), false);
+        let mut store = Store::new(Path::new(&test_dir), false, false);
         let test_key = 50;
         store.put(test_key, "100".as_bytes());
 
@@ -276,7 +280,7 @@ mod tests {
     #[test]
     fn it_persists() {
         let test_dir = TEMP_TEST_FILE_DIR.to_string() + "persists";
-        let mut store = Store::new(Path::new(&test_dir), false);
+        let mut store = Store::new(Path::new(&test_dir), false, false);
         let deleted_test_key = 50;
         let other_test_key = 999;
         store.put(deleted_test_key, "100".as_bytes());
@@ -286,7 +290,7 @@ mod tests {
         store.remove(other_test_key);
         store.put(other_test_key, "2000".as_bytes());
 
-        let mut store = Store::new(Path::new(&test_dir), true);
+        let mut store = Store::new(Path::new(&test_dir), true, true);
 
         assert_eq!(store.get(&deleted_test_key), None);
         let val = store.get(&other_test_key).unwrap();
@@ -298,7 +302,7 @@ mod tests {
     #[test]
     fn it_stores_and_retrieves_using_entries() {
         let test_dir = TEMP_TEST_FILE_DIR.to_string() + "entries-store";
-        let mut store = Store::new(Path::new(&test_dir), false);
+        let mut store = Store::new(Path::new(&test_dir), false, false);
         assert_eq!(store.file_offset, 0);
         let key = 1;
         let value = "2".as_bytes();
@@ -318,7 +322,7 @@ mod tests {
         // TODO: FIXME: We need to wipe the test dir when running tests. Old data is fucking shit
         // up. Could do a wipe dir option for the store::new method?
         let test_dir = TEMP_TEST_FILE_DIR.to_string() + "mutliple-files";
-        let mut store = Store::new(Path::new(&test_dir), false);
+        let mut store = Store::new(Path::new(&test_dir), false, false);
         store.file_size_limit_in_bytes = 1;
         assert_eq!(store.current_file_id, 1);
         let key = 1;
@@ -336,7 +340,7 @@ mod tests {
     #[test]
     fn it_reads_from_across_files() {
         let test_dir = TEMP_TEST_FILE_DIR.to_string() + "mutliple-files-reading";
-        let mut store = Store::new(Path::new(&test_dir), false);
+        let mut store = Store::new(Path::new(&test_dir), false, false);
         store.file_size_limit_in_bytes = 1;
         assert_eq!(store.current_file_id, 1);
 
