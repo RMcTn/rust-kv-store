@@ -29,6 +29,7 @@ struct Entry {
 }
 
 impl Store {
+    /// NOTE: keep_existing_file arg isn't used anymore
     pub fn new(dir_path: &Path, keep_existing_file: bool, keep_existing_dir: bool) -> Self {
         if !keep_existing_dir {
             fs::remove_dir_all(dir_path).unwrap();
@@ -38,7 +39,6 @@ impl Store {
         fs::create_dir_all(dir_path).unwrap();
 
         let file = Self::create_store_file(file_id, &dir_path, keep_existing_file);
-        // TODO: Option to wipe the whole dir AKA a fresh new store
 
         let store_info = Store::build_store_from_dir(dir_path);
 
@@ -319,8 +319,6 @@ mod tests {
 
     #[test]
     fn it_creates_a_new_file_after_crossing_filesize_limit() {
-        // TODO: FIXME: We need to wipe the test dir when running tests. Old data is fucking shit
-        // up. Could do a wipe dir option for the store::new method?
         let test_dir = TEMP_TEST_FILE_DIR.to_string() + "mutliple-files";
         let mut store = Store::new(Path::new(&test_dir), false, false);
         store.file_size_limit_in_bytes = 1;
