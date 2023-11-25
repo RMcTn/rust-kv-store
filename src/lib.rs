@@ -29,7 +29,6 @@ struct Entry {
 }
 
 impl Store {
-    /// NOTE: keep_existing_file arg isn't used anymore
     pub fn new(dir_path: &Path, keep_existing_dir: bool) -> Self {
         if !keep_existing_dir {
             if let Err(e) = fs::remove_dir_all(dir_path) {
@@ -181,7 +180,6 @@ impl Store {
 
     // TODO: This name feels a bit misleading since it's just the "data" we're building up
     fn build_store_from_dir(dir_path: &Path) -> (HashMap<u32, Entry>, u64) {
-        // TODO: Test for this!
         let mut entries = fs::read_dir(dir_path)
             .unwrap()
             .map(|res| res.map(|e| e.path()))
