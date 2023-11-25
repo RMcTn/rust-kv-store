@@ -240,6 +240,20 @@ impl Store {
         *byte_offset += line.len() + 1; // 1 for newline
         (key, entry)
     }
+
+    fn compact_file(&mut self, file_id: u64) -> HashMap<u32, Entry> {
+        let path_to_open = Self::file_path_for_file_id(file_id, &self.dir);
+        let mut file = File::open(path_to_open).unwrap();
+        let mut buffer = String::new();
+        file.read_to_string(&mut buffer).unwrap();
+        let mut byte_offset = 0;
+        let mut compacted_data: HashMap<u32, Entry> = HashMap::new();
+        for line in buffer.lines() {
+            let record = Self::parse_entry_thing_from_line(file_id, &mut byte_offset, line);
+            compacted_data.insert(record.0, record.1);
+        }
+        return compacted_data;
+    }
 }
 
 #[cfg(test)]
