@@ -11,9 +11,10 @@ type FileOffset = usize;
 
 const STORE_FILENAME_SUFFIX: &str = ".store.kv";
 
+type StoreData = HashMap<u32, Entry>;
 pub struct Store {
     writer: BufWriter<File>,
-    data: HashMap<u32, Entry>,
+    data: StoreData,
     file_offset: usize,
     current_file_id: u64,
     dir: PathBuf,
@@ -179,7 +180,7 @@ impl Store {
     }
 
     // TODO: This name feels a bit misleading since it's just the "data" we're building up
-    fn build_store_from_dir(dir_path: &Path) -> (HashMap<u32, Entry>, u64) {
+    fn build_store_from_dir(dir_path: &Path) -> (StoreData, u64) {
         let mut entries = fs::read_dir(dir_path)
             .unwrap()
             .map(|res| res.map(|e| e.path()))
@@ -202,16 +203,8 @@ impl Store {
                 // better safe than sorry
                 highest_file_id = current_file_id;
             }
-            let mut file = File::open(entry).unwrap();
-            let mut buffer = String::new();
-            file.read_to_string(&mut buffer).unwrap();
-            let mut byte_offset = 0;
 
-            for line in buffer.lines() {
-                let record =
-                    Self::parse_entry_thing_from_line(current_file_id, &mut byte_offset, line);
-                data.insert(record.0, record.1);
-            }
+            data = Self::parse_file_into_store_data(&dir_path, current_file_id, data);
         }
         return (data, highest_file_id);
     }
@@ -241,18 +234,22 @@ impl Store {
         (key, entry)
     }
 
-    fn compact_file(&mut self, file_id: u64) -> HashMap<u32, Entry> {
-        let path_to_open = Self::file_path_for_file_id(file_id, &self.dir);
+    fn parse_file_into_store_data(
+        dir_path: &Path,
+        file_id: u64,
+        mut store_data: StoreData,
+    ) -> StoreData {
+        // Compacting an existing file is the same as just creating store_data from the file
+        let path_to_open = Self::file_path_for_file_id(file_id, dir_path);
         let mut file = File::open(path_to_open).unwrap();
         let mut buffer = String::new();
         file.read_to_string(&mut buffer).unwrap();
         let mut byte_offset = 0;
-        let mut compacted_data: HashMap<u32, Entry> = HashMap::new();
         for line in buffer.lines() {
             let record = Self::parse_entry_thing_from_line(file_id, &mut byte_offset, line);
-            compacted_data.insert(record.0, record.1);
+            store_data.insert(record.0, record.1);
         }
-        return compacted_data;
+        return store_data;
     }
 }
 
