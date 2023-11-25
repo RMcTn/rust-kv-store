@@ -208,26 +208,37 @@ impl Store {
             let mut byte_offset = 0;
 
             for line in buffer.lines() {
-                let splits: Vec<_> = line.split_terminator(",").collect();
-                let key_size = splits[0].len();
-                let key: u32 = splits[0].parse().unwrap();
-                let value_size = if splits.len() == 1 {
-                    // Assume our tombstone is just "nothing" after a comma for now(?)
-                    0
-                } else {
-                    splits[1].len()
-                };
-                let entry = Entry {
-                    value_size,
-                    key_size,
-                    byte_offset_for_key: byte_offset,
-                    file_id: current_file_id,
-                };
-                byte_offset += line.len() + 1; // 1 for newline
-                data.insert(key, entry);
+                let record =
+                    Self::parse_entry_thing_from_line(current_file_id, &mut byte_offset, line);
+                data.insert(record.0, record.1);
             }
         }
         return (data, highest_file_id);
+    }
+
+    // TODO: Dear lord, rename this
+    fn parse_entry_thing_from_line(
+        current_file_id: u64,
+        byte_offset: &mut FileOffset,
+        line: &str,
+    ) -> (u32, Entry) {
+        let splits: Vec<_> = line.split_terminator(",").collect();
+        let key_size = splits[0].len();
+        let key: u32 = splits[0].parse().unwrap();
+        let value_size = if splits.len() == 1 {
+            // Assume our tombstone is just "nothing" after a comma for now(?)
+            0
+        } else {
+            splits[1].len()
+        };
+        let entry = Entry {
+            value_size,
+            key_size,
+            byte_offset_for_key: *byte_offset,
+            file_id: current_file_id,
+        };
+        *byte_offset += line.len() + 1; // 1 for newline
+        (key, entry)
     }
 }
 
