@@ -4,7 +4,7 @@ use append_key_value_store::Store;
 
 fn main() {
     // TODO: Turn this into a server that accepts requests
-    let mut store = Store::new(Path::new("stuff"), true, true);
+    let mut store = Store::new(Path::new("stuff"), true);
 
     for i in 0..=1000000 {
         store.put(i, &(i + 1).to_string().as_bytes());
@@ -39,7 +39,7 @@ mod tests {
 
         let json = serde_json::to_string(&thing).unwrap();
 
-        let mut store = Store::new(Path::new(&test_dir), false, false);
+        let mut store = Store::new(Path::new(&test_dir), false);
         let key = 1;
         store.put(key, &json.as_bytes());
 

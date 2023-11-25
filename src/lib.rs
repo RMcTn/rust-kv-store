@@ -30,7 +30,7 @@ struct Entry {
 
 impl Store {
     /// NOTE: keep_existing_file arg isn't used anymore
-    pub fn new(dir_path: &Path, keep_existing_file: bool, keep_existing_dir: bool) -> Self {
+    pub fn new(dir_path: &Path, keep_existing_dir: bool) -> Self {
         if !keep_existing_dir {
             if let Err(e) = fs::remove_dir_all(dir_path) {
                 if e.kind() != std::io::ErrorKind::NotFound {
@@ -41,7 +41,7 @@ impl Store {
         let file_id = 1;
         fs::create_dir_all(dir_path).unwrap();
 
-        let file = Self::create_store_file(file_id, &dir_path, keep_existing_file);
+        let file = Self::create_store_file(file_id, &dir_path);
 
         let store_info = Store::build_store_from_dir(dir_path);
 
@@ -79,7 +79,7 @@ impl Store {
             //  large enough, since we don't do the file limit check before the offending key/value
             //  is written.
             self.increment_file_id();
-            let new_file = Self::create_store_file(self.current_file_id, &self.dir, false);
+            let new_file = Self::create_store_file(self.current_file_id, &self.dir);
             let writer = BufWriter::new(new_file);
             self.writer = writer;
             self.file_offset = 0;
@@ -112,29 +112,18 @@ impl Store {
         return file_path;
     }
 
-    fn create_store_file(file_id: u64, dir_path: &Path, keep_existing_file: bool) -> File {
+    fn create_store_file(file_id: u64, dir_path: &Path) -> File {
         // TODO: Return errors
         let file_path = Self::file_path_for_file_id(file_id, dir_path);
 
-        // TODO: Remove this keep existing file flag. Should be an option for the dir of the store,
-        // rather than each file. Using existing file should only matter when loading up an
-        // exisitng store on startup.
-        let file = if keep_existing_file {
-            fs::File::options()
-                .append(true)
-                .create(true)
-                .read(true)
-                .open(&file_path)
-                .unwrap()
-        } else {
-            fs::File::options()
-                .create(true)
-                .read(true)
-                .write(true)
-                .truncate(true)
-                .open(&file_path)
-                .unwrap()
-        };
+        // Always open the file like we want to keep it. If we're asked to wipe the dir, then there
+        // should be no files here anyway
+        let file = fs::File::options()
+            .append(true)
+            .create(true)
+            .read(true)
+            .open(&file_path)
+            .unwrap();
         return file;
     }
 
@@ -253,7 +242,7 @@ mod tests {
     #[test]
     fn it_stores_and_retreives() {
         let test_dir = TEMP_TEST_FILE_DIR.to_string() + "stores_and_retrieves";
-        let mut store = Store::new(Path::new(&test_dir), false, false);
+        let mut store = Store::new(Path::new(&test_dir), false);
         let test_key = 50;
         assert_eq!(store.get(&test_key), None);
 
@@ -272,7 +261,7 @@ mod tests {
     #[test]
     fn it_deletes() {
         let test_dir = TEMP_TEST_FILE_DIR.to_string() + "deletes";
-        let mut store = Store::new(Path::new(&test_dir), false, false);
+        let mut store = Store::new(Path::new(&test_dir), false);
         let test_key = 50;
         store.put(test_key, "100".as_bytes());
 
@@ -283,7 +272,7 @@ mod tests {
     #[test]
     fn it_persists() {
         let test_dir = TEMP_TEST_FILE_DIR.to_string() + "persists";
-        let mut store = Store::new(Path::new(&test_dir), false, false);
+        let mut store = Store::new(Path::new(&test_dir), false);
         let deleted_test_key = 50;
         let other_test_key = 999;
         store.put(deleted_test_key, "100".as_bytes());
@@ -293,7 +282,7 @@ mod tests {
         store.remove(other_test_key);
         store.put(other_test_key, "2000".as_bytes());
 
-        let mut store = Store::new(Path::new(&test_dir), true, true);
+        let mut store = Store::new(Path::new(&test_dir), true);
 
         assert_eq!(store.get(&deleted_test_key), None);
         let val = store.get(&other_test_key).unwrap();
@@ -305,7 +294,7 @@ mod tests {
     #[test]
     fn it_stores_and_retrieves_using_entries() {
         let test_dir = TEMP_TEST_FILE_DIR.to_string() + "entries-store";
-        let mut store = Store::new(Path::new(&test_dir), false, false);
+        let mut store = Store::new(Path::new(&test_dir), false);
         assert_eq!(store.file_offset, 0);
         let key = 1;
         let value = "2".as_bytes();
@@ -323,7 +312,7 @@ mod tests {
     #[test]
     fn it_creates_a_new_file_after_crossing_filesize_limit() {
         let test_dir = TEMP_TEST_FILE_DIR.to_string() + "mutliple-files";
-        let mut store = Store::new(Path::new(&test_dir), false, false);
+        let mut store = Store::new(Path::new(&test_dir), false);
         store.file_size_limit_in_bytes = 1;
         assert_eq!(store.current_file_id, 1);
         let key = 1;
@@ -341,7 +330,7 @@ mod tests {
     #[test]
     fn it_reads_from_across_files() {
         let test_dir = TEMP_TEST_FILE_DIR.to_string() + "mutliple-files-reading";
-        let mut store = Store::new(Path::new(&test_dir), false, false);
+        let mut store = Store::new(Path::new(&test_dir), false);
         store.file_size_limit_in_bytes = 1;
         assert_eq!(store.current_file_id, 1);
 
@@ -358,7 +347,7 @@ mod tests {
     #[test]
     fn it_gets_the_highest_file_id_from_dir_when_creating_store() {
         let test_dir = TEMP_TEST_FILE_DIR.to_string() + "retrieving-highest-file-id";
-        let mut store = Store::new(Path::new(&test_dir), false, false);
+        let mut store = Store::new(Path::new(&test_dir), false);
         store.file_size_limit_in_bytes = 1;
         store.put(1, "10".as_bytes());
         store.put(2, "20".as_bytes());
@@ -366,7 +355,7 @@ mod tests {
 
         assert_eq!(store.current_file_id, 3);
 
-        let new_store = Store::new(Path::new(&test_dir), false, true);
+        let new_store = Store::new(Path::new(&test_dir), true);
         assert_eq!(new_store.current_file_id, 3);
     }
     // TODO: Some tombstone tests
