@@ -32,10 +32,13 @@ impl Store {
     /// NOTE: keep_existing_file arg isn't used anymore
     pub fn new(dir_path: &Path, keep_existing_file: bool, keep_existing_dir: bool) -> Self {
         if !keep_existing_dir {
-            fs::remove_dir_all(dir_path).unwrap();
+            if let Err(e) = fs::remove_dir_all(dir_path) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    panic!("{}", e);
+                }
+            }
         }
         let file_id = 1;
-        // TODO: Enumerate existing files to find latest file_id
         fs::create_dir_all(dir_path).unwrap();
 
         let file = Self::create_store_file(file_id, &dir_path, keep_existing_file);
@@ -350,6 +353,21 @@ mod tests {
         let result = store.get(&1).unwrap();
 
         assert_eq!(result, test_value);
+    }
+
+    #[test]
+    fn it_gets_the_highest_file_id_from_dir_when_creating_store() {
+        let test_dir = TEMP_TEST_FILE_DIR.to_string() + "retrieving-highest-file-id";
+        let mut store = Store::new(Path::new(&test_dir), false, false);
+        store.file_size_limit_in_bytes = 1;
+        store.put(1, "10".as_bytes());
+        store.put(2, "20".as_bytes());
+        store.put(3, "30".as_bytes());
+
+        assert_eq!(store.current_file_id, 3);
+
+        let new_store = Store::new(Path::new(&test_dir), false, true);
+        assert_eq!(new_store.current_file_id, 3);
     }
     // TODO: Some tombstone tests
 }
