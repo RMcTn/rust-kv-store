@@ -78,21 +78,10 @@ impl Store {
             // NOTE: TODO: The file size limit can be surpassed if the values/keys we write are
             //  large enough, since we don't do the file limit check before the offending key/value
             //  is written.
-            self.increment_file_id();
-            let new_file = Self::create_store_file(self.current_file_id, &self.dir);
-            let writer = BufWriter::new(new_file);
-            self.writer = writer;
-            self.file_offset = 0;
+            self.force_new_file();
         }
-        let key_and_sep = format!("{},", key);
 
-        let bytes = key_and_sep.as_bytes();
-        let key_and_sep_size = key_and_sep.as_bytes().len();
-        // TODO: Make sure this ALWAYS appends and doesn't just write wherever
-        self.writer.write_all(bytes).unwrap();
-        self.writer.write_all(value).unwrap();
-        self.writer.write_all("\n".as_bytes()).unwrap();
-        self.writer.flush().unwrap();
+        let bytes_written = Store::append_kv_to_file(&mut self.writer, key, value);
         let key_str = key.to_string();
         let entry = Entry {
             value_size: value.len(),
@@ -101,8 +90,19 @@ impl Store {
             file_id: self.current_file_id,
         };
         self.data.insert(key, entry);
+        self.file_offset += bytes_written;
+    }
+
+    /// Returns how many bytes were written in total
+    fn append_kv_to_file(writer: &mut BufWriter<File>, key: u32, value: &[u8]) -> usize {
+        // TODO: Make sure this ALWAYS appends and doesn't just write wherever
+        let key_and_sep = format!("{},", key);
+        writer.write_all(key_and_sep.as_bytes()).unwrap();
+        writer.write_all(value).unwrap();
+        writer.write_all("\n".as_bytes()).unwrap();
+        writer.flush().unwrap();
         let newline_size = 1;
-        self.file_offset += key_and_sep_size + value.len() + newline_size;
+        return key_and_sep.len() + value.len() + newline_size;
     }
 
     fn file_path_for_file_id(file_id: u64, dir_path: &Path) -> PathBuf {
@@ -159,6 +159,14 @@ impl Store {
         file.read_exact_at(buffer, offset as u64).unwrap();
     }
 
+    fn force_new_file(&mut self) {
+        self.increment_file_id();
+        let new_file = Self::create_store_file(self.current_file_id, &self.dir);
+        let writer = BufWriter::new(new_file);
+        self.writer = writer;
+        self.file_offset = 0;
+    }
+
     pub fn remove(&mut self, key: u32) {
         // No value after key is our "tombstone" for now - Not a great idea if we ever wanted to
         // checksum rows for corruption/crash recovery. No value = No bytes = Nothing to use as a
@@ -195,9 +203,8 @@ impl Store {
         let mut highest_file_id = 1;
         for entry in entries {
             let filename = entry.strip_prefix(dir_path).unwrap();
-            let filename = filename.to_str().unwrap();
-            let filename_sections: Vec<_> = filename.split(".").collect();
-            let current_file_id = filename_sections[0].parse().unwrap();
+            let current_file_id = Store::file_id_from_filename(filename);
+
             if current_file_id > highest_file_id {
                 // This feels like an unnecessary check since the files should be sorted, but
                 // better safe than sorry
@@ -239,7 +246,6 @@ impl Store {
         file_id: u64,
         mut store_data: StoreData,
     ) -> StoreData {
-        // Compacting an existing file is the same as just creating store_data from the file
         let path_to_open = Self::file_path_for_file_id(file_id, dir_path);
         let mut file = File::open(path_to_open).unwrap();
         let mut buffer = String::new();
@@ -250,6 +256,46 @@ impl Store {
             store_data.insert(record.0, record.1);
         }
         return store_data;
+    }
+
+    fn file_id_from_filename(filename: &Path) -> u64 {
+        let filename = filename.to_str().unwrap();
+        let filename_sections: Vec<_> = filename.split(".").collect();
+        let file_id = filename_sections[0].parse().unwrap();
+        return file_id;
+    }
+
+    fn compact(&mut self) {
+        let mut entries = fs::read_dir(&self.dir)
+            .unwrap()
+            .map(|res| res.map(|e| e.path()))
+            .collect::<Result<Vec<_>, std::io::Error>>()
+            .unwrap();
+
+        entries.sort();
+        // TODO: Get current_file_id filepath name and just compare with each entry filename,
+        // rejecting the one that doesn't match
+        let current_file_filepath = Self::file_path_for_file_id(self.current_file_id, &self.dir);
+        // TODO: NOTE: Assuming the filepaths here are all perfect for the program for now
+        let entries: Vec<_> = entries
+            .into_iter()
+            .filter(|filepath| {
+                return current_file_filepath != *filepath;
+            })
+            .collect();
+        // Merged file will just use the last highest from the files that are going to be merged.
+        // TODO: Is there a limit to compaction for files? i.e a certain length? Ignoring for
+        // now!
+
+        // Get all files that aren't currently active (something about file id)
+        //  - iterate from 1 til current_file id?
+        //      - really it's iterate from the previous highest file id
+        // Parse each file doing the parse thingy
+        // Somehow "compress" these various data stores into one (note:
+        // can't we just use the previous data store as the arg to the parsing stuff? and do that
+        // for each one, since later files should 'overwrite' any entries that are mentioned in
+        // multiple files)
+        dbg!(entries);
     }
 }
 
@@ -377,6 +423,34 @@ mod tests {
 
         let new_store = Store::new(Path::new(&test_dir), true);
         assert_eq!(new_store.current_file_id, 3);
+    }
+
+    #[test]
+    fn it_compacts_old_files_into_a_merged_file_without_touching_active_file() {
+        let test_dir = TEMP_TEST_FILE_DIR.to_string() + "file-compaction";
+        let mut store = Store::new(Path::new(&test_dir), false);
+        store.put(1, "10".as_bytes());
+        store.put(1, "1010".as_bytes());
+        store.put(2, "20".as_bytes());
+        store.put(2, "2020".as_bytes());
+        store.remove(2);
+        store.force_new_file();
+        store.put(1, "101010".as_bytes());
+        store.force_new_file();
+        store.put(3, "new".as_bytes());
+
+        store.compact();
+        let mut entries = fs::read_dir(test_dir).unwrap();
+
+        let expected_num_files = 2;
+        let actual_num_files = entries.count();
+
+        assert_eq!(expected_num_files, actual_num_files);
+    }
+
+    #[test]
+    fn compaction_will_squash_multiple_of_same_key_into_last_value() {
+        todo!()
     }
     // TODO: Some tombstone tests
 }
