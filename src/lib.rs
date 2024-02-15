@@ -12,6 +12,7 @@ type FileOffset = usize;
 const STORE_FILENAME_SUFFIX: &str = ".store.kv";
 
 type StoreData = HashMap<u32, Entry>;
+
 pub struct Store {
     writer: BufWriter<File>,
     data: StoreData,
@@ -23,10 +24,20 @@ pub struct Store {
 
 #[derive(Debug, PartialEq)]
 struct Entry {
+    // TODO: Change these usize's to u32 for now, whilst we sort things out (easier to reason with
+    // a hard 4 byte size than usize's variable size)
     value_size: usize,
     key_size: usize,
-    byte_offset_for_key: FileOffset,
+    byte_offset: FileOffset,
     file_id: u64,
+}
+
+#[derive(Debug, PartialEq)]
+struct KeyValue {
+    value_size: u32,
+    key_size: u32,
+    key: u32,
+    value: Vec<u8>,
 }
 
 impl Store {
@@ -81,12 +92,14 @@ impl Store {
             self.force_new_file();
         }
 
-        let bytes_written = Store::append_kv_to_file(&mut self.writer, key, value);
-        let key_str = key.to_string();
+        let value_size = value.len() as u32;
+        let key_size = 4;
+        let bytes_written =
+            Store::append_kv_to_file(&mut self.writer, key_size, key, value_size, value);
         let entry = Entry {
-            value_size: value.len(),
-            key_size: key_str.len(),
-            byte_offset_for_key: self.file_offset,
+            value_size: value_size as usize,
+            key_size: key_size as usize, // TODO: Use the actual key's size once it's not just a u32
+            byte_offset: self.file_offset,
             file_id: self.current_file_id,
         };
         self.data.insert(key, entry);
@@ -94,15 +107,23 @@ impl Store {
     }
 
     /// Returns how many bytes were written in total
-    fn append_kv_to_file(writer: &mut BufWriter<File>, key: u32, value: &[u8]) -> usize {
+    fn append_kv_to_file(
+        writer: &mut BufWriter<File>,
+        key_size: u32,
+        key: u32,
+        value_size: u32,
+        value: &[u8],
+    ) -> usize {
         // TODO: Make sure this ALWAYS appends and doesn't just write wherever
-        let key_and_sep = format!("{},", key);
-        writer.write_all(key_and_sep.as_bytes()).unwrap();
+        let key_size_bytes = key_size.to_le_bytes();
+        writer.write_all(&key_size_bytes).unwrap();
+        let key_bytes = key.to_le_bytes();
+        writer.write_all(&key_bytes).unwrap();
+        let value_size_bytes = value_size.to_le_bytes();
+        writer.write_all(&value_size_bytes).unwrap();
         writer.write_all(value).unwrap();
-        writer.write_all("\n".as_bytes()).unwrap();
         writer.flush().unwrap();
-        let newline_size = 1;
-        return key_and_sep.len() + value.len() + newline_size;
+        return key_size_bytes.len() + key_bytes.len() + value_size_bytes.len() + value.len();
     }
 
     fn file_path_for_file_id(file_id: u64, dir_path: &Path) -> PathBuf {
@@ -134,17 +155,12 @@ impl Store {
     pub fn get(&mut self, key: &u32) -> Option<Vec<u8>> {
         // TODO: Handle this unwrap
         let entry = self.data.get(key)?;
+
         let mut buffer: Vec<u8> = vec![0; entry.value_size];
 
-        let separator_byte_size = 1;
-        let value_offset_in_file = entry.byte_offset_for_key + entry.key_size + separator_byte_size; // - 1 since we
-                                                                                                     // start at 0
-                                                                                                     // We're storing the key offset, so need to skip over the size of the key, and the size of
-                                                                                                     // the separator ","
+        let value_offset_in_file = entry.byte_offset + 4 + entry.key_size + 4; // Skip everything until the actual value
 
-        // TODO: Might just need to open the file we get from the Entry value here for reading.
-        // Don't think we can keep the files open constantly
-        self.read_from_store_file(entry.file_id, &mut buffer, value_offset_in_file as u64);
+        self.read_from_store_file(entry.file_id, &mut buffer, value_offset_in_file);
         if buffer.is_empty() {
             // Is there a valid use case for having an empty value for a key? Assuming it is
             // the tombstone for now
@@ -153,7 +169,7 @@ impl Store {
         return Some(buffer);
     }
 
-    fn read_from_store_file(&self, file_id: u64, buffer: &mut [u8], offset: u64) {
+    fn read_from_store_file(&self, file_id: u64, buffer: &mut [u8], offset: usize) {
         let path = Self::file_path_for_file_id(file_id, &self.dir);
         let file = File::open(path).unwrap();
         file.read_exact_at(buffer, offset as u64).unwrap();
@@ -171,20 +187,20 @@ impl Store {
         // No value after key is our "tombstone" for now - Not a great idea if we ever wanted to
         // checksum rows for corruption/crash recovery. No value = No bytes = Nothing to use as a
         // tombstone checksum
-        let row = format!("{},\n", key);
         // TODO: Cleanup duplication with regular "store" method"
-        let bytes = row.as_bytes();
-        let row_size = row.as_bytes().len();
-        self.writer.write_all(bytes).unwrap();
-        let key_str = key.to_string();
+
+        let key_size = 4;
+        let value_size = 0;
+        let bytes_written =
+            Store::append_kv_to_file(&mut self.writer, key_size, key, value_size, &[]);
         let entry = Entry {
-            value_size: 0,
-            key_size: key_str.len(),
-            byte_offset_for_key: self.file_offset,
+            value_size: value_size as usize,
+            key_size: key_size as usize,
+            byte_offset: self.file_offset,
             file_id: self.current_file_id,
         };
         self.data.insert(key, entry);
-        self.file_offset += row_size;
+        self.file_offset += bytes_written;
     }
 
     // TODO: This name feels a bit misleading since it's just the "data" we're building up
@@ -216,31 +232,53 @@ impl Store {
         return (data, highest_file_id);
     }
 
-    // TODO: Dear lord, rename this
-    fn parse_entry_thing_from_line(
-        current_file_id: u64,
-        byte_offset: &mut FileOffset,
-        line: &str,
-    ) -> (u32, Entry) {
-        let splits: Vec<_> = line.split_terminator(",").collect();
-        let key_size = splits[0].len();
-        let key: u32 = splits[0].parse().unwrap();
-        let value_size = if splits.len() == 1 {
-            // Assume our tombstone is just "nothing" after a comma for now(?)
-            0
-        } else {
-            splits[1].len()
-        };
-        let entry = Entry {
+    /// Will increment byte_offset by:
+    ///     key_size value (4 bytes)
+    ///     key (key_size bytes)
+    ///     value_size value (4 bytes)
+    ///     value (value_size bytes)
+    fn parse_key_value_from_bytes(byte_offset: &mut FileOffset, bytes: &[u8]) -> KeyValue {
+        let key_size =
+            u32::from_le_bytes(bytes[*byte_offset..(*byte_offset + 4)].try_into().unwrap());
+        *byte_offset += 4;
+
+        let key = u32::from_le_bytes(bytes[*byte_offset..(*byte_offset + 4)].try_into().unwrap());
+        *byte_offset += key_size as usize;
+        // TODO: Check this doesn't contain newline
+        let value_size =
+            u32::from_le_bytes(bytes[*byte_offset..(*byte_offset + 4)].try_into().unwrap());
+        *byte_offset += 4;
+        let value = bytes[*byte_offset..(*byte_offset + value_size as usize)].to_vec();
+        *byte_offset += value_size as usize;
+
+        let kv = KeyValue {
             value_size,
             key_size,
-            byte_offset_for_key: *byte_offset,
-            file_id: current_file_id,
+            key,
+            value,
         };
-        *byte_offset += line.len() + 1; // 1 for newline
-        (key, entry)
+        return kv;
     }
 
+    fn parse_file_into_kv(dir_path: &Path, file_id: u64) -> Vec<KeyValue> {
+        let path_to_open = Self::file_path_for_file_id(file_id, dir_path);
+        let mut file = File::open(path_to_open).unwrap();
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer).unwrap();
+        let mut byte_offset = 0;
+        let mut key_values = Vec::new();
+        loop {
+            let kv = Store::parse_key_value_from_bytes(&mut byte_offset, &buffer);
+            key_values.push(kv);
+            if byte_offset >= buffer.len() {
+                break;
+            }
+        }
+
+        return key_values;
+    }
+
+    // TODO: Why do we take a mut reference to store data and return an actual struct?
     fn parse_file_into_store_data(
         dir_path: &Path,
         file_id: u64,
@@ -248,12 +286,23 @@ impl Store {
     ) -> StoreData {
         let path_to_open = Self::file_path_for_file_id(file_id, dir_path);
         let mut file = File::open(path_to_open).unwrap();
-        let mut buffer = String::new();
-        file.read_to_string(&mut buffer).unwrap();
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer).unwrap();
         let mut byte_offset = 0;
-        for line in buffer.lines() {
-            let record = Self::parse_entry_thing_from_line(file_id, &mut byte_offset, line);
-            store_data.insert(record.0, record.1);
+
+        loop {
+            if byte_offset >= buffer.len() {
+                break;
+            }
+            let byte_offset_for_key = byte_offset;
+            let kv = Store::parse_key_value_from_bytes(&mut byte_offset, &buffer);
+            let entry = Entry {
+                value_size: kv.value_size as usize,
+                key_size: kv.key_size as usize,
+                byte_offset: byte_offset_for_key,
+                file_id,
+            };
+            store_data.insert(kv.key, entry);
         }
         return store_data;
     }
