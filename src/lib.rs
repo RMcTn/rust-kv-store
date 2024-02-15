@@ -156,6 +156,8 @@ impl Store {
         // TODO: Handle this unwrap
         let entry = self.data.get(key)?;
 
+        // TODO: SPEEDUP: Could persist the buffer in the Store struct, would stop needing to
+        // allocate the value buffer every time. Benchmark before + after if doing this.
         let mut buffer: Vec<u8> = vec![0; entry.value_size];
 
         let value_offset_in_file = entry.byte_offset + 4 + entry.key_size + 4; // Skip everything until the actual value
@@ -260,22 +262,19 @@ impl Store {
         return kv;
     }
 
-    fn parse_file_into_kv(dir_path: &Path, file_id: u64) -> Vec<KeyValue> {
+    fn parse_file_into_kv(dir_path: &Path, file_id: u64, key_values: &mut HashMap<u32, Vec<u8>>) {
         let path_to_open = Self::file_path_for_file_id(file_id, dir_path);
         let mut file = File::open(path_to_open).unwrap();
         let mut buffer = Vec::new();
         file.read_to_end(&mut buffer).unwrap();
         let mut byte_offset = 0;
-        let mut key_values = Vec::new();
         loop {
             let kv = Store::parse_key_value_from_bytes(&mut byte_offset, &buffer);
-            key_values.push(kv);
+            key_values.insert(kv.key, kv.value);
             if byte_offset >= buffer.len() {
                 break;
             }
         }
-
-        return key_values;
     }
 
     // TODO: Why do we take a mut reference to store data and return an actual struct?
@@ -322,28 +321,44 @@ impl Store {
             .unwrap();
 
         entries.sort();
-        // TODO: Get current_file_id filepath name and just compare with each entry filename,
-        // rejecting the one that doesn't match
         let current_file_filepath = Self::file_path_for_file_id(self.current_file_id, &self.dir);
         // TODO: NOTE: Assuming the filepaths here are all perfect for the program for now
-        let entries: Vec<_> = entries
+        let mut entries: Vec<_> = entries
             .into_iter()
             .filter(|filepath| {
                 return current_file_filepath != *filepath;
             })
             .collect();
-        // Merged file will just use the last highest from the files that are going to be merged.
         // TODO: Is there a limit to compaction for files? i.e a certain length? Ignoring for
         // now!
 
-        // Get all files that aren't currently active (something about file id)
-        //  - iterate from 1 til current_file id?
-        //      - really it's iterate from the previous highest file id
-        // Parse each file doing the parse thingy
-        // Somehow "compress" these various data stores into one (note:
-        // can't we just use the previous data store as the arg to the parsing stuff? and do that
-        // for each one, since later files should 'overwrite' any entries that are mentioned in
-        // multiple files)
+        entries.sort();
+
+        let mut compacted_kvs = HashMap::new();
+        for entry in &entries {
+            let file_id = Self::file_id_from_filename(&entry);
+            Self::parse_file_into_kv(&self.dir, file_id, &mut compacted_kvs);
+        }
+
+        let temp_file = File::create(
+            // TODO: Don't assume current_file_id - 1 is most recent file?
+            "temp.".to_string()
+                + &Self::file_path_for_file_id(self.current_file_id - 1, &self.dir)
+                    .to_string_lossy(),
+        )
+        .unwrap();
+
+        let writer = BufWriter::new(temp_file);
+
+        // TODO: Can see why storing a timestamp with the kv would be useful now, for sorting
+        //      Assuming sorting is actually useful. Since the compacted_kvs don't have duplicates,
+        //      it shouldn't matter what order we get?
+        for (k, v) in &compacted_kvs {
+            // TODO: Write our key values to the temp file.
+            // TODO: Update existing store mapping with new values (will need to just iterate)
+            //  put() needs broken up a bit so we can write to any arbitrary file and update arbitrary
+            //  mapping
+        }
         dbg!(entries);
     }
 }
