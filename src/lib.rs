@@ -19,7 +19,7 @@ pub struct Store {
     file_offset: usize,
     current_file_id: u64,
     dir: PathBuf,
-    file_size_limit_in_bytes: u64,
+    pub file_size_limit_in_bytes: u64,
 }
 
 #[derive(Debug, PartialEq)]

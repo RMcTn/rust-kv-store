@@ -7,7 +7,7 @@ fn main() {
     let mut store = Store::new(Path::new("stuff"), true);
 
     for i in 0..=1000000 {
-        store.put(i, &(i + 1).to_string().as_bytes());
+        store.put(i, &(i + 1).to_ne_bytes());
     }
 }
 
