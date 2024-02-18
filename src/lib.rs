@@ -19,6 +19,7 @@ pub struct Store {
     file_offset: usize,
     current_file_id: u64,
     dir: PathBuf,
+    // NOTE: file size limit is not enforced for compacted files
     pub file_size_limit_in_bytes: u64,
 }
 
@@ -92,16 +93,13 @@ impl Store {
             self.force_new_file();
         }
 
-        let value_size = value.len() as u32;
-        let key_size = 4;
-        let bytes_written =
-            Store::append_kv_to_file(&mut self.writer, key_size, key, value_size, value);
-        let entry = Entry {
-            value_size: value_size as usize,
-            key_size: key_size as usize, // TODO: Use the actual key's size once it's not just a u32
-            byte_offset: self.file_offset,
-            file_id: self.current_file_id,
-        };
+        let (entry, bytes_written) = Self::create_entry(
+            &mut self.writer,
+            key,
+            value,
+            self.file_offset,
+            self.current_file_id,
+        );
         self.data.insert(key, entry);
         self.file_offset += bytes_written;
     }
@@ -340,26 +338,62 @@ impl Store {
             Self::parse_file_into_kv(&self.dir, file_id, &mut compacted_kvs);
         }
 
+        // TODO: Don't assume current_file_id - 1 is most recent file?
+        let compaction_file_id = self.current_file_id - 1;
         let temp_file = File::create(
-            // TODO: Don't assume current_file_id - 1 is most recent file?
             "temp.".to_string()
-                + &Self::file_path_for_file_id(self.current_file_id - 1, &self.dir)
-                    .to_string_lossy(),
+                + &Self::file_path_for_file_id(compaction_file_id, &self.dir).to_string_lossy(),
         )
         .unwrap();
 
-        let writer = BufWriter::new(temp_file);
+        let mut writer = BufWriter::new(temp_file);
 
         // TODO: Can see why storing a timestamp with the kv would be useful now, for sorting
         //      Assuming sorting is actually useful. Since the compacted_kvs don't have duplicates,
         //      it shouldn't matter what order we get?
+        let mut mapping_entries = vec![];
+        let mut file_offset = 0;
         for (k, v) in &compacted_kvs {
             // TODO: Write our key values to the temp file.
             // TODO: Update existing store mapping with new values (will need to just iterate)
             //  put() needs broken up a bit so we can write to any arbitrary file and update arbitrary
             //  mapping
+
+            let (entry, bytes_written) =
+                Self::create_entry(&mut writer, *k, v, file_offset, compaction_file_id);
+
+            file_offset += bytes_written;
+
+            // TODO: Why are the files above called entries?
+            mapping_entries.push(entry);
         }
-        dbg!(entries);
+
+        // With our mapping_entries, we can now update the store mapping.
+        // TODO: NOTE: Timestamps might be needed for the merging process, otherwise we won't
+        // know if the existing mapping with a key is newer than the one we're trying to merge
+        //      Actually, entries store their file_id, so as long as the file_id isn't the
+        //      current one in the store (or greater), then our compacted kvs should have the
+        //      LATEST version of that key + value
+    }
+
+    /// Returns the Entry created for key and value, and how many bytes were written to file
+    fn create_entry(
+        writer: &mut BufWriter<File>,
+        key: u32,
+        value: &[u8],
+        file_offset: FileOffset,
+        file_id: u64,
+    ) -> (Entry, usize) {
+        let value_size = value.len() as u32;
+        let key_size = 4;
+        let bytes_written = Store::append_kv_to_file(writer, key_size, key, value_size, value);
+        let entry = Entry {
+            value_size: value_size as usize,
+            key_size: key_size as usize, // TODO: Use the actual key's size once it's not just a u32
+            byte_offset: file_offset,
+            file_id,
+        };
+        return (entry, bytes_written);
     }
 }
 
