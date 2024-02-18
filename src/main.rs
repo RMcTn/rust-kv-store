@@ -6,9 +6,14 @@ fn main() {
     // TODO: Turn this into a server that accepts requests
     let mut store = Store::new(Path::new("stuff"), true);
 
+    store.put(50000000, "hello".as_bytes());
     for i in 0..=1000000 {
         store.put(i, &(i + 1).to_ne_bytes());
     }
+
+    store.compact();
+    let returned = String::from_utf8(store.get(&50000000).unwrap()).unwrap();
+    dbg!(returned);
 }
 
 #[cfg(test)]

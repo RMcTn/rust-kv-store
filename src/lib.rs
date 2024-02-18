@@ -5,6 +5,7 @@ use std::{
     io::{BufWriter, Read, Write},
     os::unix::prelude::FileExt,
     path::{Path, PathBuf},
+    str::FromStr,
 };
 
 type FileOffset = usize;
@@ -125,10 +126,14 @@ impl Store {
     }
 
     fn file_path_for_file_id(file_id: u64, dir_path: &Path) -> PathBuf {
-        let filename = file_id.to_string() + STORE_FILENAME_SUFFIX;
-        let mut file_path = dir_path.to_path_buf();
-        file_path.push(&filename);
+        let filename = Self::filename_for_file_id(file_id);
+        let file_path = dir_path.join(&filename);
         return file_path;
+    }
+
+    fn filename_for_file_id(file_id: u64) -> String {
+        let filename = file_id.to_string() + STORE_FILENAME_SUFFIX;
+        return filename;
     }
 
     fn create_store_file(file_id: u64, dir_path: &Path) -> File {
@@ -311,17 +316,18 @@ impl Store {
         return file_id;
     }
 
-    fn compact(&mut self) {
-        let mut entries = fs::read_dir(&self.dir)
+    pub fn compact(&mut self) {
+        // TODO: Background thread!
+        let mut store_files = fs::read_dir(&self.dir)
             .unwrap()
             .map(|res| res.map(|e| e.path()))
             .collect::<Result<Vec<_>, std::io::Error>>()
             .unwrap();
 
-        entries.sort();
+        store_files.sort(); // FIXME: This sorts as strings, 101 > 1000. Write a test for it as well (might need to be a separate long running packaged test)
         let current_file_filepath = Self::file_path_for_file_id(self.current_file_id, &self.dir);
         // TODO: NOTE: Assuming the filepaths here are all perfect for the program for now
-        let mut entries: Vec<_> = entries
+        let mut files_for_compaction: Vec<_> = store_files
             .into_iter()
             .filter(|filepath| {
                 return current_file_filepath != *filepath;
@@ -330,50 +336,53 @@ impl Store {
         // TODO: Is there a limit to compaction for files? i.e a certain length? Ignoring for
         // now!
 
-        entries.sort();
+        files_for_compaction.sort();
 
         let mut compacted_kvs = HashMap::new();
-        for entry in &entries {
-            let file_id = Self::file_id_from_filename(&entry);
+        for entry in &files_for_compaction {
+            let filename = entry.strip_prefix(&self.dir).unwrap();
+            let file_id = Self::file_id_from_filename(filename);
             Self::parse_file_into_kv(&self.dir, file_id, &mut compacted_kvs);
         }
 
         // TODO: Don't assume current_file_id - 1 is most recent file?
         let compaction_file_id = self.current_file_id - 1;
-        let temp_file = File::create(
-            "temp.".to_string()
-                + &Self::file_path_for_file_id(compaction_file_id, &self.dir).to_string_lossy(),
-        )
-        .unwrap();
+        let compaction_sacrifice_filename = Self::filename_for_file_id(compaction_file_id);
+        let compaction_sacrifice_file_path = self.dir.join(&compaction_sacrifice_filename);
+        let compaction_filename = "temp.".to_string() + &compaction_sacrifice_filename;
+        let compaction_file_path = self.dir.join(&compaction_filename);
+        let compaction_file = File::create(&compaction_file_path).unwrap();
 
-        let mut writer = BufWriter::new(temp_file);
+        let mut compaction_file = BufWriter::new(compaction_file);
 
-        // TODO: Can see why storing a timestamp with the kv would be useful now, for sorting
-        //      Assuming sorting is actually useful. Since the compacted_kvs don't have duplicates,
-        //      it shouldn't matter what order we get?
         let mut mapping_entries = vec![];
         let mut file_offset = 0;
         for (k, v) in &compacted_kvs {
-            // TODO: Write our key values to the temp file.
-            // TODO: Update existing store mapping with new values (will need to just iterate)
-            //  put() needs broken up a bit so we can write to any arbitrary file and update arbitrary
-            //  mapping
-
             let (entry, bytes_written) =
-                Self::create_entry(&mut writer, *k, v, file_offset, compaction_file_id);
+                Self::create_entry(&mut compaction_file, *k, v, file_offset, compaction_file_id);
 
             file_offset += bytes_written;
 
-            // TODO: Why are the files above called entries?
-            mapping_entries.push(entry);
+            mapping_entries.push((k, entry));
         }
 
-        // With our mapping_entries, we can now update the store mapping.
-        // TODO: NOTE: Timestamps might be needed for the merging process, otherwise we won't
-        // know if the existing mapping with a key is newer than the one we're trying to merge
-        //      Actually, entries store their file_id, so as long as the file_id isn't the
-        //      current one in the store (or greater), then our compacted kvs should have the
-        //      LATEST version of that key + value
+        for (k, entry) in mapping_entries {
+            if let Some(val) = self.data.get_mut(k) {
+                // As long as the existing value's file_id isn't greater than the compaction file
+                // id, then our compacted kvs should have the latest version of that key + value
+                if val.file_id <= compaction_file_id {
+                    *val = entry;
+                }
+            }
+        }
+
+        std::fs::rename(compaction_file_path, compaction_sacrifice_file_path).unwrap();
+
+        // Ensure we don't delete our newly compacted file as well!
+        files_for_compaction.remove(files_for_compaction.len() - 1);
+        for entry in &files_for_compaction {
+            fs::remove_file(entry).unwrap();
+        }
     }
 
     /// Returns the Entry created for key and value, and how many bytes were written to file
@@ -525,7 +534,7 @@ mod tests {
 
     #[test]
     fn it_compacts_old_files_into_a_merged_file_without_touching_active_file() {
-        let test_dir = TEMP_TEST_FILE_DIR.to_string() + "file-compaction";
+        let test_dir = TEMP_TEST_FILE_DIR.to_string() + "file-compaction/untouched-active-file";
         let mut store = Store::new(Path::new(&test_dir), false);
         store.put(1, "10".as_bytes());
         store.put(1, "1010".as_bytes());
@@ -533,22 +542,42 @@ mod tests {
         store.put(2, "2020".as_bytes());
         store.remove(2);
         store.force_new_file();
+        store.put(3, "old".as_bytes());
         store.put(1, "101010".as_bytes());
         store.force_new_file();
+        assert_eq!(store.current_file_id, 3);
         store.put(3, "new".as_bytes());
 
         store.compact();
-        let mut entries = fs::read_dir(test_dir).unwrap();
+        let entries = fs::read_dir(test_dir).unwrap();
 
         let expected_num_files = 2;
         let actual_num_files = entries.count();
 
         assert_eq!(expected_num_files, actual_num_files);
+        assert_eq!(store.get(&3), Some("new".as_bytes().to_vec()));
     }
 
     #[test]
-    fn compaction_will_squash_multiple_of_same_key_into_last_value() {
-        todo!()
+    fn compaction_will_squash_multiple_of_same_key_into_latest_value() {
+        let test_dir = TEMP_TEST_FILE_DIR.to_string() + "file-compaction/remove-duplicates";
+        let mut store = Store::new(Path::new(&test_dir), false);
+        store.put(1, "10".as_bytes());
+        store.put(1, "1010".as_bytes());
+        store.put(2, "20".as_bytes());
+        store.put(2, "2020".as_bytes());
+        store.remove(2);
+        store.put(2, "202020".as_bytes());
+        store.force_new_file();
+        store.put(1, "101010".as_bytes());
+        store.force_new_file();
+        assert_eq!(store.current_file_id, 3);
+        store.put(3, "new".as_bytes());
+
+        store.compact();
+
+        assert_eq!(store.get(&1), Some("101010".as_bytes().to_vec()));
+        assert_eq!(store.get(&2), Some("202020".as_bytes().to_vec()));
     }
     // TODO: Some tombstone tests
 }
