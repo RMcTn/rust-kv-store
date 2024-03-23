@@ -1,5 +1,5 @@
 [package]
-name = "server"
+name = "common"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,6 +7,3 @@ edition = "2021"
 
 [dependencies]
 bytes = "1.6.0"
-
-store = { path = "../store" }
-common = { path = "../common" }
