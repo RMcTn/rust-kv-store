@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use append_key_value_store::Store;
+use store::Store;
 
 fn main() {
     // TODO: Turn this into a server that accepts requests
@@ -22,7 +22,7 @@ mod tests {
 
     use serde::{Deserialize, Serialize};
 
-    use append_key_value_store::Store;
+    use store::Store;
 
     // TODO: Move this const to some shared place. Some cargo thing possibly?
     const TEMP_TEST_FILE_DIR: &str = "./tmp_test_files/";
