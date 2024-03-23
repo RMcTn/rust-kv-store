@@ -36,6 +36,7 @@ impl Connection {
                         return Some(Command::Ping);
                     }
                 }
+                Frame::Biggie(_) => todo!(),
             }
         }
         return None;
@@ -44,6 +45,10 @@ impl Connection {
     pub fn send_command(&mut self, cmd: Command) -> io::Result<()> {
         match cmd {
             Command::Ping => {
+                let frame = Frame::from_cmd(&cmd);
+                self.send_frame(&frame)?;
+            }
+            Command::Put(_) => {
                 let frame = Frame::from_cmd(&cmd);
                 self.send_frame(&frame)?;
             }
@@ -71,6 +76,7 @@ impl Connection {
                         return Some(Response::Pong);
                     }
                 }
+                Frame::Biggie(_) => todo!(),
             }
         }
         return None;
@@ -100,6 +106,7 @@ impl Connection {
                 self.writer.write_all(b"\r\n")?;
                 self.writer.flush()?;
             }
+            Frame::Biggie(_) => todo!(),
         }
         Ok(())
     }

@@ -30,9 +30,10 @@ fn handle_client(mut connection: Connection) {
 
     loop {
         if let Some(cmd) = connection.read_command() {
-            dbg!("Got command {:?}", cmd);
+            dbg!("Got command {:?}", &cmd);
             match cmd {
                 Command::Ping => connection.send_response(Response::Pong).unwrap(),
+                Command::Put(_) => todo!(),
             }
         }
     }

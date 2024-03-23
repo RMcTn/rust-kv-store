@@ -5,9 +5,10 @@ use bytes::Buf;
 use crate::command::Command;
 use crate::command::Response;
 
-/// Going with something like the Redis protocol here  - https://redis.io/docs/reference/protocol-spec/
+/// Going with something like the Redis protocol here (although not exact) - https://redis.io/docs/reference/protocol-spec/
 pub enum Frame {
     Simple(String),
+    Biggie(Vec<u8>),
 }
 
 impl Frame {
@@ -43,6 +44,24 @@ impl Frame {
     pub fn from_cmd(cmd: &Command) -> Frame {
         match cmd {
             Command::Ping => Frame::Simple("PING".to_string()),
+            Command::Put((key, value)) => {
+                // Encode our key and value in the below format.
+                // Just have a custom format?
+                // $<key-length>\r\n<key>\r\n<value-length>\r\n<value>\r\n
+                let mut buffer = vec![];
+
+                buffer.push(b'$');
+                buffer.push(b'4'); // 4 bytes since the key is just u32
+                buffer.extend_from_slice(b"\r\n");
+                // TODO: Please just make the keys bytes at this point
+                buffer.extend_from_slice(key.to_string().as_bytes());
+                buffer.extend_from_slice(b"\r\n");
+                buffer.extend_from_slice(value.len().to_string().as_bytes());
+                buffer.extend_from_slice(b"\r\n");
+                buffer.extend_from_slice(value);
+
+                Frame::Biggie(buffer)
+            }
         }
     }
 
