@@ -9,7 +9,9 @@ use crate::command::Response;
 /// Going with something like the Redis protocol here (although not exact) - https://redis.io/docs/reference/protocol-spec/
 pub enum Frame {
     Simple(String),
-    Biggie(Vec<u8>, Vec<u8>),
+    // TODO: Is key value a bit higher level for frames? Feels like something more application
+    // level.
+    KeyValue(Vec<u8>, Vec<u8>),
 }
 
 impl Frame {
@@ -43,8 +45,7 @@ impl Frame {
                 let value = Self::get_bytes(bytes, value_length)?;
                 Self::advance_past_delimiter(bytes)?;
 
-
-                return Some(Frame::Biggie(key, value));
+                return Some(Frame::KeyValue(key, value));
             }
             0 => return None,
             byte => todo!("Handle {}", byte),
@@ -98,7 +99,7 @@ impl Frame {
                 // SPEEDUP: Don't clone these
                 let key = key.to_be_bytes().to_vec();
                 let value: Vec<u8> = value.to_vec();
-                Frame::Biggie(key, value)
+                Frame::KeyValue(key, value)
             }
         }
     }
@@ -138,7 +139,7 @@ mod tests {
         let frame = Frame::try_parse(&mut cursor).unwrap();
 
         match frame {
-            Frame::Biggie(k, v) => {
+            Frame::KeyValue(k, v) => {
                 assert_eq!(k, 5_u32.to_be_bytes());
                 assert_eq!(v, 99_u32.to_be_bytes());
             }

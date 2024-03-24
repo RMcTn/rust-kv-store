@@ -36,7 +36,7 @@ impl Connection {
                         return Some(Command::Ping);
                     }
                 }
-                Frame::Biggie(key, value) => {
+                Frame::KeyValue(key, value) => {
                     let key = u32::from_le_bytes(key.try_into().unwrap());
                     return Some(Command::Put((key, value)));
                 }
@@ -79,7 +79,7 @@ impl Connection {
                         return Some(Response::Pong);
                     }
                 }
-                Frame::Biggie(..) => todo!(),
+                Frame::KeyValue(..) => todo!(),
             }
         }
         return None;
@@ -109,7 +109,7 @@ impl Connection {
                 self.writer.write_all(b"\r\n")?;
                 self.writer.flush()?;
             }
-            Frame::Biggie(key, value) => {
+            Frame::KeyValue(key, value) => {
                 // Encode our key and value in the below format.
                 // Just have a custom format?
                 // $<key-length>\r\n<key>\r\n<value-length>\r\n<value>\r\n
