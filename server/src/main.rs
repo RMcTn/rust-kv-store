@@ -19,14 +19,18 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     println!("Listening for TCP connections on {}", addr);
 
-    let store_dir = PathBuf::from_str("store_stuff/")?;
+    // TODO: Configurable store dir
+    let store_dir = PathBuf::from_str("server_store_stuff/")?;
 
     let mut store = Store::new(&store_dir, true);
     let (sender, receiver) = mpsc::channel::<(u32, Vec<u8>)>();
 
     thread::spawn(move || loop {
         match receiver.recv() {
-            Ok((key, value)) => store.put(key, &value),
+            Ok((key, value)) => {
+                store.put(key, &value);
+                dbg!(store.get(&key));
+            }
             Err(_) => todo!(),
         }
     });

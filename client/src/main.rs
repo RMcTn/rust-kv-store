@@ -14,6 +14,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut connection = Connection::new(stream);
 
+    let key = 50;
+    let value = "Will this send?";
+
     println!("Sending PING command");
     connection.send_command(Command::Ping)?;
     println!("PING command sent");
@@ -21,8 +24,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     loop {
         if let Some(resp) = connection.read_response() {
             match resp {
-                Response::Pong => println!("Got PONG from server"),
+                Response::Pong => {
+                    println!("Got PONG from server");
+                    break;
+                }
             }
         }
     }
+
+    println!("Sending PUT command with key: {}, value: {}", key, value);
+    connection.send_command(Command::Put((key, value.as_bytes().to_vec())))?;
+    println!("PUT command sent");
+
+    Ok(())
 }

@@ -114,17 +114,19 @@ impl Connection {
                 // Just have a custom format?
                 // $<key-length>\r\n<key>\r\n<value-length>\r\n<value>\r\n
                 self.writer.write_all(b"$")?;
-                self.writer.write_all(b"4")?; // 4 bytes since the key is just u32
-                                              // TODO: FIXME: Need to think about byte endianness.
-                                              // Probably just go little endian
+                self.writer.write_all(&4_u32.to_be_bytes())?; // 4 bytes since the key is just u32
+                                                              // TODO: FIXME: Need to think about byte endianness.
+                                                              // Probably just go big endian to match network
+                                                              // convention
                 self.writer.write_all(b"\r\n")?;
                 self.writer.write_all(key)?;
                 self.writer.write_all(b"\r\n")?;
-                self.writer.write_all(&value.len().to_string().as_bytes())?; // TODO: Byte
-                                                                             // endianness so
-                                                                             // string isn't needed
+                let value_len = value.len() as u32; // TODO: Allow this to be u64
+                self.writer.write_all(&value_len.to_be_bytes())?;
 
+                self.writer.write_all(b"\r\n")?;
                 self.writer.write_all(&value)?;
+                self.writer.write_all(b"\r\n")?;
                 self.writer.flush()?;
             }
         }
