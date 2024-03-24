@@ -7,7 +7,7 @@ use server::Server;
 #[test]
 fn ping() {
     let server_addr = "127.0.0.1:3333";
-    let store_dir = PathBuf::from("temp/");
+    let store_dir = PathBuf::from("tmp/ping");
     let mut server = Server::new(server_addr.parse().unwrap(), &store_dir, false);
 
     thread::spawn(move || {
@@ -24,7 +24,7 @@ fn ping() {
 fn put() {
     // TODO: Need to do something about these server addresses
     let server_addr = "127.0.0.1:3334";
-    let store_dir = PathBuf::from("temp/");
+    let store_dir = PathBuf::from("tmp/put");
     let mut server = Server::new(server_addr.parse().unwrap(), &store_dir, false);
 
     thread::spawn(move || {
