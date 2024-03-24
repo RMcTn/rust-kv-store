@@ -1,4 +1,11 @@
-use std::{error::Error, net::TcpListener, path::PathBuf, str::FromStr};
+use std::{
+    error::Error,
+    net::TcpListener,
+    path::PathBuf,
+    str::FromStr,
+    sync::mpsc::{self, Sender},
+    thread,
+};
 
 use common::{
     command::{Command, Response},
@@ -14,18 +21,26 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let store_dir = PathBuf::from_str("store_stuff/")?;
 
-    let store = Store::new(&store_dir, true);
+    let mut store = Store::new(&store_dir, true);
+    let (sender, receiver) = mpsc::channel::<(u32, Vec<u8>)>();
+
+    thread::spawn(move || loop {
+        match receiver.recv() {
+            Ok((key, value)) => store.put(key, &value),
+            Err(_) => todo!(),
+        }
+    });
 
     for stream in listener.incoming() {
         let stream = stream?;
         let connection = Connection::new(stream);
-        handle_client(connection);
+        handle_client(connection, sender.clone());
     }
 
     Ok(())
 }
 
-fn handle_client(mut connection: Connection) {
+fn handle_client(mut connection: Connection, channel: Sender<(u32, Vec<u8>)>) {
     println!("Client connected from {}", connection.addr);
 
     loop {
@@ -33,7 +48,7 @@ fn handle_client(mut connection: Connection) {
             dbg!("Got command {:?}", &cmd);
             match cmd {
                 Command::Ping => connection.send_response(Response::Pong).unwrap(),
-                Command::Put(_) => todo!(),
+                Command::Put((key, value)) => channel.send((key, value)).unwrap(),
             }
         }
     }

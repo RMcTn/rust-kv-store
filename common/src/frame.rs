@@ -31,14 +31,7 @@ impl Frame {
                 return None;
             }
             b'$' => {
-                // Ready many \r\n until the last one
-
                 // $<key-length>\r\n<key>\r\n<value-length>\r\n<value>\r\n
-                let start = bytes.position() as usize;
-                let end = bytes.get_ref().len() - 1;
-                // read 4(n) bytes, read \r\n, read n bytes, read \r\n, read 4(x) bytes, read \r\n,
-                // read x bytes, read \r\n
-
                 let key_length = Self::get_u32(bytes)? as usize; // TODO: FIXME: Byte endianness!
                 Self::advance_past_delimiter(bytes)?;
 
@@ -88,7 +81,7 @@ impl Frame {
         }
 
         let pos = cursor.position() as usize;
-        if cursor.get_ref()[pos] != b'\r' && cursor.get_ref()[pos + 1] != b'\n' {
+        if (cursor.get_ref()[pos..(pos + 1)]) != *Self::DELIMITER {
             return None;
         }
         cursor.advance(2);

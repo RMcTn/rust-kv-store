@@ -36,7 +36,10 @@ impl Connection {
                         return Some(Command::Ping);
                     }
                 }
-                Frame::Biggie(..) => todo!(),
+                Frame::Biggie(key, value) => {
+                    let key = u32::from_le_bytes(key.try_into().unwrap());
+                    return Some(Command::Put((key, value)));
+                }
             }
         }
         return None;
@@ -112,7 +115,8 @@ impl Connection {
                 // $<key-length>\r\n<key>\r\n<value-length>\r\n<value>\r\n
                 self.writer.write_all(b"$")?;
                 self.writer.write_all(b"4")?; // 4 bytes since the key is just u32
-                                              // TODO: FIXME: Need to think about byte endianness
+                                              // TODO: FIXME: Need to think about byte endianness.
+                                              // Probably just go little endian
                 self.writer.write_all(b"\r\n")?;
                 self.writer.write_all(key)?;
                 self.writer.write_all(b"\r\n")?;

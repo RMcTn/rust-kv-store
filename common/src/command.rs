@@ -1,7 +1,7 @@
 #[derive(Debug)]
-pub enum Command<'a> {
+pub enum Command {
     Ping,
-    Put((u32, &'a [u8])),
+    Put((u32, Vec<u8>)),
 }
 
 #[derive(Debug)]
