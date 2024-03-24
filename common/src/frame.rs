@@ -15,7 +15,8 @@ pub enum Frame {
 impl Frame {
     const DELIMITER: &'static [u8; 2] = b"\r\n";
     pub fn try_parse(mut bytes: &mut Cursor<&[u8]>) -> Option<Frame> {
-        match Self::get_u8(&mut bytes)? {
+        let first_byte = Self::get_u8(&mut bytes)?;
+        match first_byte {
             b'+' => {
                 // Read until \r\n
 
@@ -38,8 +39,10 @@ impl Frame {
                 let key = Self::get_bytes(bytes, key_length)?;
                 Self::advance_past_delimiter(bytes)?;
                 let value_length = Self::get_u32(bytes)? as usize; // TODO: FIXME: Byte endianness!
+                Self::advance_past_delimiter(bytes)?;
                 let value = Self::get_bytes(bytes, value_length)?;
                 Self::advance_past_delimiter(bytes)?;
+
 
                 return Some(Frame::Biggie(key, value));
             }
@@ -81,7 +84,7 @@ impl Frame {
         }
 
         let pos = cursor.position() as usize;
-        if (cursor.get_ref()[pos..(pos + 1)]) != *Self::DELIMITER {
+        if (cursor.get_ref()[pos..=(pos + 1)]) != *Self::DELIMITER {
             return None;
         }
         cursor.advance(2);
@@ -92,9 +95,8 @@ impl Frame {
         match cmd {
             Command::Ping => Frame::Simple("PING".to_string()),
             Command::Put((key, value)) => {
-                // TODO: FIXME: Need to think about byte endianness
                 // SPEEDUP: Don't clone these
-                let key = key.to_string().as_bytes().to_vec();
+                let key = key.to_be_bytes().to_vec();
                 let value: Vec<u8> = value.to_vec();
                 Frame::Biggie(key, value)
             }
@@ -104,6 +106,43 @@ impl Frame {
     pub fn from_response(resp: &Response) -> Frame {
         match resp {
             Response::Pong => Frame::Simple("PONG".to_string()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{self, Write};
+
+    use super::Frame;
+
+    #[test]
+    fn parse_key_value_frame() {
+        let mut bytes = vec![];
+        let key = 5_u32;
+        let value = 99_u32;
+        let value = value.to_be_bytes();
+        let _ = bytes.write_all(b"$");
+        let _ = bytes.write_all(&4_u32.to_be_bytes());
+        let _ = bytes.write_all(b"\r\n");
+        let _ = bytes.write_all(&key.to_be_bytes());
+        let _ = bytes.write_all(b"\r\n");
+        let value_len = value.len() as u32;
+        let _ = bytes.write_all(&value_len.to_be_bytes());
+        let _ = bytes.write_all(b"\r\n");
+        let _ = bytes.write_all(&value);
+        let _ = bytes.write_all(b"\r\n");
+
+        let mut cursor = io::Cursor::new(bytes.as_slice());
+
+        let frame = Frame::try_parse(&mut cursor).unwrap();
+
+        match frame {
+            Frame::Biggie(k, v) => {
+                assert_eq!(k, 5_u32.to_be_bytes());
+                assert_eq!(v, 99_u32.to_be_bytes());
+            }
+            _ => assert!(false, "Frame was not parsed as key_value"),
         }
     }
 }
