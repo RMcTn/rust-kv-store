@@ -36,7 +36,7 @@ impl Connection {
                         return Some(Command::Ping);
                     }
                 }
-                Frame::Biggie(_) => todo!(),
+                Frame::Biggie(..) => todo!(),
             }
         }
         return None;
@@ -76,7 +76,7 @@ impl Connection {
                         return Some(Response::Pong);
                     }
                 }
-                Frame::Biggie(_) => todo!(),
+                Frame::Biggie(..) => todo!(),
             }
         }
         return None;
@@ -101,12 +101,28 @@ impl Connection {
     fn write_frame(&mut self, frame: &Frame) -> io::Result<()> {
         match frame {
             Frame::Simple(s) => {
-                self.writer.write(b"+")?;
+                self.writer.write_all(b"+")?;
                 self.writer.write_all(s.as_bytes())?;
                 self.writer.write_all(b"\r\n")?;
                 self.writer.flush()?;
             }
-            Frame::Biggie(_) => todo!(),
+            Frame::Biggie(key, value) => {
+                // Encode our key and value in the below format.
+                // Just have a custom format?
+                // $<key-length>\r\n<key>\r\n<value-length>\r\n<value>\r\n
+                self.writer.write_all(b"$")?;
+                self.writer.write_all(b"4")?; // 4 bytes since the key is just u32
+                                              // TODO: FIXME: Need to think about byte endianness
+                self.writer.write_all(b"\r\n")?;
+                self.writer.write_all(key)?;
+                self.writer.write_all(b"\r\n")?;
+                self.writer.write_all(&value.len().to_string().as_bytes())?; // TODO: Byte
+                                                                             // endianness so
+                                                                             // string isn't needed
+
+                self.writer.write_all(&value)?;
+                self.writer.flush()?;
+            }
         }
         Ok(())
     }
