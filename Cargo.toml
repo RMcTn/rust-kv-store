@@ -1,1 +1,1 @@
-workspace = { members = [ "client", "common",  "server", "store"] }
+workspace = { members = [ "client", "common", "server", "store", "tests-integration"] }
