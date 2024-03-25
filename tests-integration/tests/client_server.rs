@@ -21,7 +21,7 @@ fn ping() {
 }
 
 #[test]
-fn put() {
+fn put_and_get() {
     // TODO: Need to do something about these server addresses
     let server_addr = "127.0.0.1:3334";
     let store_dir = PathBuf::from("tmp/put");
@@ -36,6 +36,6 @@ fn put() {
     let mut client = Client::new(connection);
     let key = 50;
     let value = "Woowee for tests".as_bytes().to_vec();
-    assert!(client.put(key, value).is_ok());
-    // TODO: Client gets value and assert
+    assert!(client.put(key, value.clone()).is_ok());
+    assert_eq!(client.get(key).unwrap(), Some(value));
 }

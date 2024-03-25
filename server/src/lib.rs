@@ -43,11 +43,15 @@ impl Server {
         for stream in self.listener.incoming() {
             let stream = stream.unwrap();
             let connection = Connection::new(stream);
-            Self::handle_client(connection, sender.clone());
+            Self::handle_client(connection, sender.clone(), self.store.clone());
         }
     }
 
-    fn handle_client(mut connection: Connection, channel: Sender<(u32, Vec<u8>)>) {
+    fn handle_client(
+        mut connection: Connection,
+        channel: Sender<(u32, Vec<u8>)>,
+        store: Arc<Mutex<Store>>,
+    ) {
         println!("Client connected from {}", connection.addr);
 
         loop {
@@ -56,6 +60,10 @@ impl Server {
                 match cmd {
                     Command::Ping => connection.send_response(Response::Pong).unwrap(),
                     Command::Put((key, value)) => channel.send((key, value)).unwrap(),
+                    Command::Get(key) => {
+                        let value = store.lock().unwrap().get(&key);
+                        connection.send_response(Response::Value(value)).unwrap()
+                    }
                 }
             }
         }

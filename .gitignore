@@ -1,5 +1,5 @@
 /target
 /Cargo.lock
 tmp_test_files/*
-tests_integrations/tmp
+tests_integrations/tmp/*
 

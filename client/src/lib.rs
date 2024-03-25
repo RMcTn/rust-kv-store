@@ -18,18 +18,24 @@ impl Client {
     pub fn ping(&mut self) -> io::Result<()> {
         self.connection.send_command(Command::Ping)?;
         loop {
-            if let Ok(resp) = self.connection.read_response() {
-                match resp {
-                    Response::Pong => {
-                        println!("Got PONG from server");
-                        return Ok(());
-                    }
-                }
+            if let Ok(Response::Pong) = self.connection.read_response() {
+                println!("Got PONG from server");
+                return Ok(());
             }
         }
     }
 
     pub fn put(&mut self, key: u32, value: Vec<u8>) -> io::Result<()> {
         self.connection.send_command(Command::Put((key, value)))
+    }
+
+    pub fn get(&mut self, key: u32) -> io::Result<Option<Vec<u8>>> {
+        self.connection.send_command(Command::Get(key))?;
+        loop {
+            if let Ok(Response::Value(value)) = self.connection.read_response() {
+                println!("Got value from server for key {}", key);
+                return Ok(value);
+            }
+        }
     }
 }
