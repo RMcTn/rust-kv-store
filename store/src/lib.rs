@@ -5,7 +5,6 @@ use std::{
     io::{BufWriter, Read, Write},
     os::unix::prelude::FileExt,
     path::{Path, PathBuf},
-    str::FromStr,
 };
 
 type FileOffset = usize;
@@ -155,7 +154,7 @@ impl Store {
         self.current_file_id += 1;
     }
 
-    pub fn get(&mut self, key: &u32) -> Option<Vec<u8>> {
+    pub fn get(&self, key: &u32) -> Option<Vec<u8>> {
         // TODO: Handle this unwrap
         let entry = self.data.get(key)?;
 

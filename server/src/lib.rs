@@ -3,7 +3,7 @@ use std::{
     path::Path,
     sync::{
         mpsc::{self, Sender},
-        Arc, Mutex,
+        Arc, Mutex, RwLock,
     },
     thread,
 };
@@ -16,42 +16,25 @@ use store::Store;
 
 pub struct Server {
     pub listener: TcpListener,
-    pub store: Arc<Mutex<Store>>,
+    pub store: Arc<RwLock<Store>>,
 }
 
 impl Server {
     pub fn new(addr: SocketAddr, store_dir: &Path, keep_existing_dir: bool) -> Self {
         let listener = TcpListener::bind(&addr).unwrap();
-        let store = Arc::new(Mutex::new(Store::new(&store_dir, keep_existing_dir)));
+        let store = Arc::new(RwLock::new(Store::new(&store_dir, keep_existing_dir)));
         Self { store, listener }
     }
 
     pub fn run(&mut self) {
-        let (sender, receiver) = mpsc::channel::<(u32, Vec<u8>)>();
-
-        let store = self.store.clone();
-        thread::spawn(move || loop {
-            match receiver.recv() {
-                Ok((key, value)) => {
-                    store.lock().unwrap().put(key, &value);
-                    dbg!(store.lock().unwrap().get(&key));
-                }
-                Err(_) => todo!(),
-            }
-        });
-
         for stream in self.listener.incoming() {
             let stream = stream.unwrap();
             let connection = Connection::new(stream);
-            Self::handle_client(connection, sender.clone(), self.store.clone());
+            Self::handle_client(connection, self.store.clone());
         }
     }
 
-    fn handle_client(
-        mut connection: Connection,
-        channel: Sender<(u32, Vec<u8>)>,
-        store: Arc<Mutex<Store>>,
-    ) {
+    fn handle_client(mut connection: Connection, store: Arc<RwLock<Store>>) {
         println!("Client connected from {}", connection.addr);
 
         loop {
@@ -59,9 +42,9 @@ impl Server {
                 dbg!("Got command {:?}", &cmd);
                 match cmd {
                     Command::Ping => connection.send_response(Response::Pong).unwrap(),
-                    Command::Put((key, value)) => channel.send((key, value)).unwrap(),
+                    Command::Put((key, value)) => store.write().unwrap().put(key, &value),
                     Command::Get(key) => {
-                        let value = store.lock().unwrap().get(&key);
+                        let value = store.read().unwrap().get(&key);
                         connection.send_response(Response::Value(value)).unwrap()
                     }
                 }
