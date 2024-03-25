@@ -18,7 +18,7 @@ impl Client {
     pub fn ping(&mut self) -> io::Result<()> {
         self.connection.send_command(Command::Ping)?;
         loop {
-            if let Some(resp) = self.connection.read_response() {
+            if let Ok(resp) = self.connection.read_response() {
                 match resp {
                     Response::Pong => {
                         println!("Got PONG from server");

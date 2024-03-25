@@ -51,7 +51,7 @@ impl Server {
         println!("Client connected from {}", connection.addr);
 
         loop {
-            if let Some(cmd) = connection.read_command() {
+            if let Ok(cmd) = connection.read_command() {
                 dbg!("Got command {:?}", &cmd);
                 match cmd {
                     Command::Ping => connection.send_response(Response::Pong).unwrap(),
