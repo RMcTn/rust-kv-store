@@ -5,6 +5,7 @@ use common::{
     connection::Connection,
 };
 
+// TODO: Specify timeout
 pub struct Client {
     connection: Connection,
 }

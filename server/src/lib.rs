@@ -1,11 +1,7 @@
 use std::{
     net::{SocketAddr, TcpListener},
     path::Path,
-    sync::{
-        mpsc::{self, Sender},
-        Arc, Mutex, RwLock,
-    },
-    thread,
+    sync::{Arc, RwLock},
 };
 
 use common::{
@@ -27,6 +23,7 @@ impl Server {
     }
 
     pub fn run(&mut self) {
+        // TODO: Don't block for each request
         for stream in self.listener.incoming() {
             let stream = stream.unwrap();
             let connection = Connection::new(stream);
