@@ -76,6 +76,10 @@ impl Store {
         };
     }
 
+    pub fn flush(&mut self) {
+        self.write_mem_table_to_disk();
+    }
+
     // Stores value with key. User is responsible for serializing/deserializing
     pub fn put(&mut self, key: u32, value: &[u8]) {
         // TODO: Make key a byte slice as well
@@ -145,7 +149,7 @@ impl Store {
         match self.active_mem_table.get(key).cloned() {
             Some(v) => return Some(v),
             None => {
-                for file_id in self.current_file_id..0 {
+                for file_id in (0..=self.current_file_id).rev() {
                     // Check our store files for the value
                     if let Some(index) = self.store_indexes.get(&file_id) {
                         if let Some(entry) = index.get(key) {
@@ -475,6 +479,8 @@ mod tests {
         store.put(other_test_key, "1000".as_bytes());
         store.remove(other_test_key);
         store.put(other_test_key, "2000".as_bytes());
+
+        store.flush();
 
         let mut store = Store::new(Path::new(&test_dir), true);
 
