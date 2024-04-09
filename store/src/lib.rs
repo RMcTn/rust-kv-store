@@ -16,10 +16,10 @@ type StoreIndexes = HashMap<u64, StoreData>; // file id to store data index
 pub struct Store {
     current_file_id: u64,
     dir: PathBuf,
-    // NOTE: file size limit is not enforced for compacted files
-    pub file_size_limit_in_bytes: u64,
+    pub mem_table_size_limit_in_bytes: u64,
     active_mem_table: BTreeMap<u32, Vec<u8>>,
     store_indexes: StoreIndexes,
+    bytes_written_since_last_flush: u64,
 }
 
 #[derive(Debug, PartialEq)]
@@ -55,9 +55,10 @@ impl Store {
         return Store {
             current_file_id: store_info.1,
             dir: dir_path.to_path_buf(),
-            file_size_limit_in_bytes: 5000,
+            mem_table_size_limit_in_bytes: 5000,
             active_mem_table: BTreeMap::new(),
             store_indexes: store_info.0,
+            bytes_written_since_last_flush: 0,
         };
     }
 
@@ -70,9 +71,8 @@ impl Store {
         // TODO: Make key a byte slice as well
 
         self.active_mem_table.insert(key, value.to_owned());
-        if self.active_mem_table.len() == 5 {
-            // TODO: Keep track of how many bytes the mem table holds for deciding threshold to write
-            // to disk
+        self.bytes_written_since_last_flush += (key.to_le_bytes().len() + value.len()) as u64;
+        if self.bytes_written_since_last_flush > self.mem_table_size_limit_in_bytes {
             // TODO: Handle ongoing writes as we persist the mem table in the background
             self.write_mem_table_to_disk();
         }
@@ -443,7 +443,7 @@ mod tests {
 
         store.flush();
 
-        let mut store = Store::new(Path::new(&test_dir), true);
+        let store = Store::new(Path::new(&test_dir), true);
 
         assert_eq!(store.get(&deleted_test_key), None);
         let val = store.get(&other_test_key).unwrap();
@@ -470,10 +470,10 @@ mod tests {
     }
 
     #[test]
-    fn it_creates_a_new_file_after_crossing_filesize_limit() {
+    fn it_creates_a_new_file_after_crossing_mem_table_size_limit() {
         let test_dir = TEMP_TEST_FILE_DIR.to_string() + "mutliple-files";
         let mut store = Store::new(Path::new(&test_dir), false);
-        store.file_size_limit_in_bytes = 1;
+        store.mem_table_size_limit_in_bytes = 1;
         assert_eq!(store.current_file_id, 1);
         let key = 1;
         let value = "2".as_bytes();
@@ -482,7 +482,7 @@ mod tests {
         let key = 500;
         let value = "5000000".as_bytes();
         store.put(key, value);
-        assert_eq!(store.current_file_id, 2);
+        assert_eq!(store.current_file_id, 3);
         let files: Vec<_> = fs::read_dir(test_dir).unwrap().collect();
         assert_eq!(files.len(), 2);
     }
@@ -491,7 +491,7 @@ mod tests {
     fn it_reads_from_across_files() {
         let test_dir = TEMP_TEST_FILE_DIR.to_string() + "mutliple-files-reading";
         let mut store = Store::new(Path::new(&test_dir), false);
-        store.file_size_limit_in_bytes = 1;
+        store.mem_table_size_limit_in_bytes = 1;
         assert_eq!(store.current_file_id, 1);
 
         let test_value = "10".as_bytes();
@@ -550,6 +550,11 @@ mod tests {
 
         assert_eq!(store.get(&1), Some("101010".as_bytes().to_vec()));
         assert_eq!(store.get(&2), Some("202020".as_bytes().to_vec()));
+    }
+
+    #[test]
+    fn tombstone_test() {
+        todo!()
     }
     // TODO: Some tombstone tests
 }
