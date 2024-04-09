@@ -4,7 +4,7 @@ use store::Store;
 
 fn main() {
     // TODO: Turn this into a server that accepts requests
-    let mut store = Store::new(Path::new("stuff"), true);
+    let mut store = Store::new(Path::new("stuff"), false);
 
     store.put(50000000, "hello".as_bytes());
     for i in 0..=1000000 {

@@ -216,6 +216,7 @@ impl Store {
             file_offset += bytes_written;
         }
         self.active_mem_table.clear();
+        self.bytes_written_since_last_flush = 0;
     }
 
     pub fn remove(&mut self, key: u32) {
@@ -243,7 +244,7 @@ impl Store {
         let mut store_index = HashMap::new();
         for entry in entries {
             let filename = entry.strip_prefix(dir_path).unwrap();
-            let current_file_id = Store::file_id_from_filename(filename);
+            let current_file_id = Store::file_id_from_path(filename);
 
             if current_file_id > highest_file_id {
                 // This feels like an unnecessary check since the files should be sorted, but
@@ -327,8 +328,8 @@ impl Store {
         }
     }
 
-    fn file_id_from_filename(filename: &Path) -> u64 {
-        let filename = filename.to_str().unwrap();
+    fn file_id_from_path(filename: &Path) -> u64 {
+        let filename = filename.file_name().unwrap().to_string_lossy();
         let filename_sections: Vec<_> = filename.split(".").collect();
         let file_id = filename_sections[0].parse().unwrap();
         return file_id;
@@ -336,25 +337,28 @@ impl Store {
 
     pub fn compact(&mut self) {
         // TODO: Background thread!
-        let mut store_files = fs::read_dir(&self.dir)
+
+        // TODO: NOTE: Assuming the filepaths here are all perfect for the program for now
+        let mut files_for_compaction = fs::read_dir(&self.dir)
             .unwrap()
             .map(|res| res.map(|e| e.path()))
             .collect::<Result<Vec<_>, std::io::Error>>()
             .unwrap();
 
-        store_files.sort(); // FIXME: This sorts as strings, 101 > 1000. Write a test for it as well (might need to be a separate long running packaged test)
-
-        // TODO: NOTE: Assuming the filepaths here are all perfect for the program for now
-        let mut files_for_compaction: Vec<_> = store_files.into_iter().collect();
         // TODO: Is there a limit to compaction for files? i.e a certain length? Ignoring for
         // now!
 
-        files_for_compaction.sort();
+        if files_for_compaction.is_empty() {
+            return;
+        }
+
+        files_for_compaction
+            .sort_by(|a, b| Self::file_id_from_path(a).cmp(&Self::file_id_from_path(b)));
 
         let mut compacted_kvs = HashMap::new();
         for entry in &files_for_compaction {
             let filename = entry.strip_prefix(&self.dir).unwrap();
-            let file_id = Self::file_id_from_filename(filename);
+            let file_id = Self::file_id_from_path(filename);
             Self::parse_file_into_kv(&self.dir, file_id, &mut compacted_kvs);
         }
 
