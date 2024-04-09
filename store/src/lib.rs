@@ -155,11 +155,7 @@ impl Store {
                         if let Some(entry) = index.get(key) {
                             let value_offset_in_file = entry.byte_offset + 4 + entry.key_size + 4; // Skip everything until the actual value
                             let mut buffer: Vec<u8> = vec![0; entry.value_size];
-                            self.read_from_store_file(
-                                file_id,
-                                &mut buffer,
-                                entry.byte_offset + value_offset_in_file,
-                            );
+                            self.read_from_store_file(file_id, &mut buffer, value_offset_in_file);
                             if buffer.is_empty() {
                                 // TODO: Is there a valid use case for having an empty value for a key? Assuming it is
                                 // the tombstone for now
@@ -182,11 +178,6 @@ impl Store {
         let path = Self::file_path_for_file_id(file_id, &self.dir);
         let file = File::open(path).unwrap();
         file.read_exact_at(buffer, offset as u64).unwrap();
-    }
-
-    fn force_new_file(&mut self) {
-        let new_file = self.create_fresh_store_file();
-        let writer = BufWriter::new(new_file);
     }
 
     fn create_fresh_store_file(&mut self) -> File {
@@ -341,7 +332,6 @@ impl Store {
     }
 
     pub fn compact(&mut self) {
-        todo!("Mid SSTable rework");
         // TODO: Background thread!
         let mut store_files = fs::read_dir(&self.dir)
             .unwrap()
@@ -350,14 +340,9 @@ impl Store {
             .unwrap();
 
         store_files.sort(); // FIXME: This sorts as strings, 101 > 1000. Write a test for it as well (might need to be a separate long running packaged test)
-        let current_file_filepath = Self::file_path_for_file_id(self.current_file_id, &self.dir);
+
         // TODO: NOTE: Assuming the filepaths here are all perfect for the program for now
-        let mut files_for_compaction: Vec<_> = store_files
-            .into_iter()
-            .filter(|filepath| {
-                return current_file_filepath != *filepath;
-            })
-            .collect();
+        let mut files_for_compaction: Vec<_> = store_files.into_iter().collect();
         // TODO: Is there a limit to compaction for files? i.e a certain length? Ignoring for
         // now!
 
@@ -370,8 +355,7 @@ impl Store {
             Self::parse_file_into_kv(&self.dir, file_id, &mut compacted_kvs);
         }
 
-        // TODO: Don't assume current_file_id - 1 is most recent file?
-        let compaction_file_id = self.current_file_id - 1;
+        let compaction_file_id = self.current_file_id;
         let compaction_sacrifice_filename = Self::filename_for_file_id(compaction_file_id);
         let compaction_sacrifice_file_path = self.dir.join(&compaction_sacrifice_filename);
         let compaction_filename = "temp.".to_string() + &compaction_sacrifice_filename;
@@ -380,7 +364,7 @@ impl Store {
 
         let mut compaction_file = BufWriter::new(compaction_file);
 
-        let mut mapping_entries = vec![];
+        let mut mapping_entries = HashMap::new();
         let mut file_offset = 0;
         for (k, v) in &compacted_kvs {
             let (entry, bytes_written) =
@@ -388,20 +372,12 @@ impl Store {
 
             file_offset += bytes_written;
 
-            mapping_entries.push((k, entry));
+            mapping_entries.insert(*k, entry);
         }
 
-        // for (k, entry) in mapping_entries {
-        //     if let Some(val) = self.data.get_mut(k) {
-        //         // As long as the existing value's file_id isn't greater than the compaction file
-        //         // id, then our compacted kvs should have the latest version of that key + value
-        //         if val.file_id <= compaction_file_id {
-        //             *val = entry;
-        //         }
-        //     }
-        // }
-
         std::fs::rename(compaction_file_path, compaction_sacrifice_file_path).unwrap();
+        self.store_indexes
+            .insert(compaction_file_id, mapping_entries);
 
         // Ensure we don't delete our newly compacted file as well!
         files_for_compaction.remove(files_for_compaction.len() - 1);
@@ -552,10 +528,10 @@ mod tests {
         store.put(2, "20".as_bytes());
         store.put(2, "2020".as_bytes());
         store.remove(2);
-        store.force_new_file();
+        store.flush();
         store.put(3, "old".as_bytes());
         store.put(1, "101010".as_bytes());
-        store.force_new_file();
+        store.flush();
         assert_eq!(store.current_file_id, 3);
         store.put(3, "new".as_bytes());
 
@@ -579,9 +555,9 @@ mod tests {
         store.put(2, "2020".as_bytes());
         store.remove(2);
         store.put(2, "202020".as_bytes());
-        store.force_new_file();
+        store.flush();
         store.put(1, "101010".as_bytes());
-        store.force_new_file();
+        store.flush();
         assert_eq!(store.current_file_id, 3);
         store.put(3, "new".as_bytes());
 
