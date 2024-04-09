@@ -505,7 +505,7 @@ mod tests {
     }
 
     #[test]
-    fn it_compacts_old_files_into_a_merged_file_without_touching_active_file() {
+    fn it_compacts_old_files_into_a_merged_file() {
         let test_dir = TEMP_TEST_FILE_DIR.to_string() + "file-compaction/untouched-active-file";
         let mut store = Store::new(Path::new(&test_dir), false);
         store.put(1, "10".as_bytes());
@@ -523,7 +523,7 @@ mod tests {
         store.compact();
         let entries = fs::read_dir(test_dir).unwrap();
 
-        let expected_num_files = 2;
+        let expected_num_files = 1;
         let actual_num_files = entries.count();
 
         assert_eq!(expected_num_files, actual_num_files);
