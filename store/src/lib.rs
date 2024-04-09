@@ -12,6 +12,7 @@ type FileOffset = usize;
 const STORE_FILENAME_SUFFIX: &str = ".store.kv";
 
 type StoreData = HashMap<u32, Entry>;
+type StoreIndexes = HashMap<u64, StoreData>; // file id to store data index
 
 //
 //
@@ -28,13 +29,12 @@ type StoreData = HashMap<u32, Entry>;
 //  SSTables right now. Can do later)
 
 pub struct Store {
-    data: StoreData,
     current_file_id: u64,
     dir: PathBuf,
     // NOTE: file size limit is not enforced for compacted files
     pub file_size_limit_in_bytes: u64,
     active_mem_table: BTreeMap<u32, Vec<u8>>,
-    store_indexes: HashMap<u64, StoreData>, // file id to store data index
+    store_indexes: StoreIndexes,
 }
 
 #[derive(Debug, PartialEq)]
@@ -68,12 +68,11 @@ impl Store {
 
         let store_info = Store::build_store_from_dir(dir_path);
         return Store {
-            data: store_info.0,
             current_file_id: store_info.1,
             dir: dir_path.to_path_buf(),
             file_size_limit_in_bytes: 5000,
             active_mem_table: BTreeMap::new(),
-            store_indexes: HashMap::new(),
+            store_indexes: store_info.0,
         };
     }
 
@@ -231,7 +230,7 @@ impl Store {
     }
 
     // TODO: This name feels a bit misleading since it's just the "data" we're building up
-    fn build_store_from_dir(dir_path: &Path) -> (StoreData, u64) {
+    fn build_store_from_dir(dir_path: &Path) -> (StoreIndexes, u64) {
         let mut entries = fs::read_dir(dir_path)
             .unwrap()
             .map(|res| res.map(|e| e.path()))
@@ -242,8 +241,8 @@ impl Store {
         // TODO: Assuming that the directory only holds good data, and no bad files (such as
         // malformed file names).
 
-        let mut data = HashMap::new();
         let mut highest_file_id = 1;
+        let mut store_index = HashMap::new();
         for entry in entries {
             let filename = entry.strip_prefix(dir_path).unwrap();
             let current_file_id = Store::file_id_from_filename(filename);
@@ -254,9 +253,12 @@ impl Store {
                 highest_file_id = current_file_id;
             }
 
-            data = Self::parse_file_into_store_data(&dir_path, current_file_id, data);
+            store_index.insert(current_file_id, StoreData::new());
+            let store_data = store_index.get_mut(&current_file_id).unwrap();
+
+            Self::parse_file_into_store_data(&dir_path, current_file_id, store_data);
         }
-        return (data, highest_file_id);
+        return (store_index, highest_file_id);
     }
 
     /// Will increment byte_offset by:
@@ -303,11 +305,7 @@ impl Store {
     }
 
     // TODO: Why do we take a mut reference to store data and return an actual struct?
-    fn parse_file_into_store_data(
-        dir_path: &Path,
-        file_id: u64,
-        mut store_data: StoreData,
-    ) -> StoreData {
+    fn parse_file_into_store_data(dir_path: &Path, file_id: u64, store_data: &mut StoreData) {
         let path_to_open = Self::file_path_for_file_id(file_id, dir_path);
         let mut file = File::open(path_to_open).unwrap();
         let mut buffer = Vec::new();
@@ -326,9 +324,9 @@ impl Store {
                 byte_offset: byte_offset_for_key,
                 file_id,
             };
+
             store_data.insert(kv.key, entry);
         }
-        return store_data;
     }
 
     fn file_id_from_filename(filename: &Path) -> u64 {
@@ -339,6 +337,7 @@ impl Store {
     }
 
     pub fn compact(&mut self) {
+        todo!("Mid SSTable rework");
         // TODO: Background thread!
         let mut store_files = fs::read_dir(&self.dir)
             .unwrap()
@@ -388,15 +387,15 @@ impl Store {
             mapping_entries.push((k, entry));
         }
 
-        for (k, entry) in mapping_entries {
-            if let Some(val) = self.data.get_mut(k) {
-                // As long as the existing value's file_id isn't greater than the compaction file
-                // id, then our compacted kvs should have the latest version of that key + value
-                if val.file_id <= compaction_file_id {
-                    *val = entry;
-                }
-            }
-        }
+        // for (k, entry) in mapping_entries {
+        //     if let Some(val) = self.data.get_mut(k) {
+        //         // As long as the existing value's file_id isn't greater than the compaction file
+        //         // id, then our compacted kvs should have the latest version of that key + value
+        //         if val.file_id <= compaction_file_id {
+        //             *val = entry;
+        //         }
+        //     }
+        // }
 
         std::fs::rename(compaction_file_path, compaction_sacrifice_file_path).unwrap();
 
