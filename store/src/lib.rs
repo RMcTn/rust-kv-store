@@ -1,6 +1,6 @@
 // TODO: "Log" Compaction
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     fs::{self, File},
     io::{BufWriter, Read, Write},
     os::unix::prelude::FileExt,
@@ -13,6 +13,20 @@ const STORE_FILENAME_SUFFIX: &str = ".store.kv";
 
 type StoreData = HashMap<u32, Entry>;
 
+//
+//
+//
+//
+// TODO - Make the move to an LSM-Tree. Need to start saving file segments as SSTables, and keep
+// a memtable of writes, then persist
+//
+// Plan:
+//  Memtable first (writes happen here)
+//  Write out memtable as an SSTable
+//  Check memtable for reads
+//  Check previous sstable segments for reads after memtable (don't worry about indexing the
+//  SSTables right now. Can do later)
+
 pub struct Store {
     writer: BufWriter<File>,
     data: StoreData,
@@ -21,6 +35,7 @@ pub struct Store {
     dir: PathBuf,
     // NOTE: file size limit is not enforced for compacted files
     pub file_size_limit_in_bytes: u64,
+    mem_table: BTreeMap<u32, Vec<u8>>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -67,24 +82,13 @@ impl Store {
             current_file_id: store_info.1,
             dir: dir_path.to_path_buf(),
             file_size_limit_in_bytes: 5000,
+            mem_table: BTreeMap::new(),
         };
     }
 
     // Stores value with key. User is responsible for serializing/deserializing
     pub fn put(&mut self, key: u32, value: &[u8]) {
         // TODO: Make key a byte slice as well
-
-        // TODO: Going to change it from providing a filename for the store to providing a
-        // directory for the store. We can then keep a incrementing counter for file id that is
-        // used for filenames too (inside that dir anyway)
-        // Steps here:
-        // Have keystore load from a directory (we'll default a file name for now). - DONE
-        // Name file with incrementing file id prefix. - DONE.
-        // Start writing multiple files after some "limit" is passed for each file (say 5 writes
-        // for testing or something). - DONE.
-        // Store the file ID with the entry. - DONE.
-        // Load up multiple files in the store dir (latest file id will be from counting)
-        // Compaction + Merging
 
         if self.file_offset as u64 >= self.file_size_limit_in_bytes {
             // NOTE: TODO: The file size limit can be surpassed if the values/keys we write are
@@ -100,6 +104,10 @@ impl Store {
             self.file_offset,
             self.current_file_id,
         );
+        self.mem_table.insert(key, value.to_owned());
+        // TODO: Keep track of how many bytes the mem table holds for deciding threshold to write
+        // to disk
+        // TODO: persist mem_table to disk
         self.data.insert(key, entry);
         self.file_offset += bytes_written;
     }
@@ -158,6 +166,8 @@ impl Store {
         // TODO: Handle this unwrap
         let entry = self.data.get(key)?;
 
+        return self.mem_table.get(key).cloned();
+
         // TODO: SPEEDUP: Could persist the buffer in the Store struct, would stop needing to
         // allocate the value buffer every time. Benchmark before + after if doing this.
         let mut buffer: Vec<u8> = vec![0; entry.value_size];
@@ -192,6 +202,8 @@ impl Store {
         // checksum rows for corruption/crash recovery. No value = No bytes = Nothing to use as a
         // tombstone checksum
         // TODO: Cleanup duplication with regular "store" method"
+
+        self.mem_table.remove(&key);
 
         let key_size = 4;
         let value_size = 0;
