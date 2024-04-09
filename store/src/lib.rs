@@ -17,9 +17,19 @@ pub struct Store {
     current_file_id: u64,
     dir: PathBuf,
     pub mem_table_size_limit_in_bytes: u64,
-    active_mem_table: BTreeMap<u32, Vec<u8>>,
+    active_mem_table: BTreeMap<u32, TableEntry>,
+    // TODO: Sparse index for keys in the store. Since the keys are
+    //     sorted, we only need to keep a subset of keys indexed. We can scan for the key in the
+    //     file if it isn't indexed already (keys are sorted, so we know at least what key the
+    //     requested key comes AFTER)
     store_indexes: StoreIndexes,
     bytes_written_since_last_flush: u64,
+}
+
+#[derive(Clone)]
+enum TableEntry {
+    Tombstone,
+    Populated(Vec<u8>),
 }
 
 #[derive(Debug, PartialEq)]
@@ -70,7 +80,8 @@ impl Store {
     pub fn put(&mut self, key: u32, value: &[u8]) {
         // TODO: Make key a byte slice as well
 
-        self.active_mem_table.insert(key, value.to_owned());
+        self.active_mem_table
+            .insert(key, TableEntry::Populated(value.to_owned()));
         self.bytes_written_since_last_flush += (key.to_le_bytes().len() + value.len()) as u64;
         if self.bytes_written_since_last_flush > self.mem_table_size_limit_in_bytes {
             // TODO: Handle ongoing writes as we persist the mem table in the background
@@ -84,7 +95,7 @@ impl Store {
         key_size: u32,
         key: u32,
         value_size: u32,
-        value: &[u8],
+        value: Option<&[u8]>,
     ) -> usize {
         // TODO: Make sure this ALWAYS appends and doesn't just write wherever
         let key_size_bytes = key_size.to_le_bytes();
@@ -93,9 +104,15 @@ impl Store {
         writer.write_all(&key_bytes).unwrap();
         let value_size_bytes = value_size.to_le_bytes();
         writer.write_all(&value_size_bytes).unwrap();
-        writer.write_all(value).unwrap();
+
+        if let Some(value) = value {
+            writer.write_all(value).unwrap();
+        }
         writer.flush().unwrap();
-        return key_size_bytes.len() + key_bytes.len() + value_size_bytes.len() + value.len();
+        return key_size_bytes.len()
+            + key_bytes.len()
+            + value_size_bytes.len()
+            + value_size as usize;
     }
 
     fn file_path_for_file_id(file_id: u64, dir_path: &Path) -> PathBuf {
@@ -129,10 +146,11 @@ impl Store {
     }
 
     pub fn get(&self, key: &u32) -> Option<Vec<u8>> {
-        // TODO: Handle this unwrap
-
         match self.active_mem_table.get(key).cloned() {
-            Some(v) => return Some(v),
+            Some(table_entry) => match table_entry {
+                TableEntry::Tombstone => return None,
+                TableEntry::Populated(v) => Some(v),
+            },
             None => {
                 for file_id in (0..=self.current_file_id).rev() {
                     // Check our store files for the value
@@ -181,7 +199,10 @@ impl Store {
             .insert(self.current_file_id, StoreData::new());
         let store_index = self.store_indexes.get_mut(&self.current_file_id).unwrap();
         for (key, value) in self.active_mem_table.iter() {
-            let value_size = value.len() as u32;
+            let (value, value_size) = match value {
+                TableEntry::Tombstone => (None, 0),
+                TableEntry::Populated(v) => (Some(v.as_slice()), v.len() as u32),
+            };
             let key_size = 4;
             let bytes_written =
                 Self::append_kv_to_file(&mut writer, key_size, *key, value_size, value);
@@ -203,10 +224,7 @@ impl Store {
         // tombstone checksum
         // TODO: Cleanup duplication with regular "store" method"
 
-        self.active_mem_table.remove(&key); // TODO: FIXME: This should be a tombstone value, otherwise
-                                            // removing a key that has been written to disk, then trying
-                                            // to read that key, will result in looking up the value from
-                                            // disk (Which is wrong!) - Add a test
+        self.active_mem_table.insert(key, TableEntry::Tombstone);
     }
 
     // TODO: This name feels a bit misleading since it's just the "data" we're building up
@@ -381,7 +399,8 @@ impl Store {
     ) -> (Entry, usize) {
         let value_size = value.len() as u32;
         let key_size = 4;
-        let bytes_written = Store::append_kv_to_file(writer, key_size, key, value_size, value);
+        let bytes_written =
+            Store::append_kv_to_file(writer, key_size, key, value_size, Some(value));
         let entry = Entry {
             value_size: value_size as usize,
             key_size: key_size as usize, // TODO: Use the actual key's size once it's not just a u32
@@ -553,8 +572,15 @@ mod tests {
     }
 
     #[test]
-    fn tombstone_test() {
-        todo!()
+    fn mem_table_tombstones_removed_values() {
+        let test_dir = TEMP_TEST_FILE_DIR.to_string() + "tombstone/mem-table-tombstone";
+        let mut store = Store::new(Path::new(&test_dir), false);
+        let key_to_remove = 1;
+        store.put(key_to_remove, "10".as_bytes());
+        store.flush();
+        assert_eq!(store.get(&key_to_remove), Some("10".as_bytes().to_vec()));
+        store.remove(key_to_remove);
+        assert_eq!(store.get(&key_to_remove), None);
     }
     // TODO: Some tombstone tests
 }
