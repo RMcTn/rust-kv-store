@@ -17,6 +17,9 @@ pub struct Store {
     current_file_id: u64,
     dir: PathBuf,
     pub mem_table_size_limit_in_bytes: u64,
+    // TODO: FIXME: Anything stored in the active mem table will be lost if the process crashes.
+    //      Build up a write ahead log that gets cleared every time the mem table gets flushed to
+    //      make fully durable
     active_mem_table: BTreeMap<u32, TableEntry>,
     // TODO: Sparse index for keys in the store. Since the keys are
     //     sorted, we only need to keep a subset of keys indexed. We can scan for the key in the
