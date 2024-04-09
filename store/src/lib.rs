@@ -28,14 +28,13 @@ type StoreData = HashMap<u32, Entry>;
 //  SSTables right now. Can do later)
 
 pub struct Store {
-    writer: BufWriter<File>,
     data: StoreData,
-    file_offset: usize,
     current_file_id: u64,
     dir: PathBuf,
     // NOTE: file size limit is not enforced for compacted files
     pub file_size_limit_in_bytes: u64,
     active_mem_table: BTreeMap<u32, Vec<u8>>,
+    store_indexes: HashMap<u64, StoreData>, // file id to store data index
 }
 
 #[derive(Debug, PartialEq)]
@@ -65,24 +64,16 @@ impl Store {
                 }
             }
         }
-        let file_id = 1;
         fs::create_dir_all(dir_path).unwrap();
 
-        let file = Self::create_store_file(file_id, &dir_path);
-
         let store_info = Store::build_store_from_dir(dir_path);
-
-        let writer = BufWriter::new(file.try_clone().unwrap());
-
-        let file_size = file.metadata().unwrap().len() as usize;
         return Store {
-            writer,
             data: store_info.0,
-            file_offset: file_size,
             current_file_id: store_info.1,
             dir: dir_path.to_path_buf(),
             file_size_limit_in_bytes: 5000,
             active_mem_table: BTreeMap::new(),
+            store_indexes: HashMap::new(),
         };
     }
 
@@ -90,29 +81,13 @@ impl Store {
     pub fn put(&mut self, key: u32, value: &[u8]) {
         // TODO: Make key a byte slice as well
 
-        if self.file_offset as u64 >= self.file_size_limit_in_bytes {
-            // NOTE: TODO: The file size limit can be surpassed if the values/keys we write are
-            //  large enough, since we don't do the file limit check before the offending key/value
-            //  is written.
-            self.force_new_file();
-        }
-
-        let (entry, bytes_written) = Self::create_entry(
-            &mut self.writer,
-            key,
-            value,
-            self.file_offset,
-            self.current_file_id,
-        );
         self.active_mem_table.insert(key, value.to_owned());
         if self.active_mem_table.len() == 5 {
+            // TODO: Keep track of how many bytes the mem table holds for deciding threshold to write
+            // to disk
+            // TODO: Handle ongoing writes as we persist the mem table in the background
             self.write_mem_table_to_disk();
         }
-        // TODO: Keep track of how many bytes the mem table holds for deciding threshold to write
-        // to disk
-        // TODO: persist mem_table to disk
-        self.data.insert(key, entry);
-        self.file_offset += bytes_written;
     }
 
     /// Returns how many bytes were written in total
@@ -167,23 +142,37 @@ impl Store {
 
     pub fn get(&self, key: &u32) -> Option<Vec<u8>> {
         // TODO: Handle this unwrap
-        let entry = self.data.get(key)?;
 
-        return self.active_mem_table.get(key).cloned();
-
-        // TODO: SPEEDUP: Could persist the buffer in the Store struct, would stop needing to
-        // allocate the value buffer every time. Benchmark before + after if doing this.
-        let mut buffer: Vec<u8> = vec![0; entry.value_size];
-
-        let value_offset_in_file = entry.byte_offset + 4 + entry.key_size + 4; // Skip everything until the actual value
-
-        self.read_from_store_file(entry.file_id, &mut buffer, value_offset_in_file);
-        if buffer.is_empty() {
-            // Is there a valid use case for having an empty value for a key? Assuming it is
-            // the tombstone for now
-            return None;
+        match self.active_mem_table.get(key).cloned() {
+            Some(v) => return Some(v),
+            None => {
+                for file_id in self.current_file_id..0 {
+                    // Check our store files for the value
+                    if let Some(index) = self.store_indexes.get(&file_id) {
+                        if let Some(entry) = index.get(key) {
+                            let value_offset_in_file = entry.byte_offset + 4 + entry.key_size + 4; // Skip everything until the actual value
+                            let mut buffer: Vec<u8> = vec![0; entry.value_size];
+                            self.read_from_store_file(
+                                file_id,
+                                &mut buffer,
+                                entry.byte_offset + value_offset_in_file,
+                            );
+                            if buffer.is_empty() {
+                                // TODO: Is there a valid use case for having an empty value for a key? Assuming it is
+                                // the tombstone for now
+                                return None;
+                            }
+                            return Some(buffer);
+                        }
+                    } else {
+                        // No index here means we've probably reached beyond our active store
+                        // files
+                        return None;
+                    }
+                }
+                return None;
+            }
         }
-        return Some(buffer);
     }
 
     fn read_from_store_file(&self, file_id: u64, buffer: &mut [u8], offset: usize) {
@@ -195,8 +184,6 @@ impl Store {
     fn force_new_file(&mut self) {
         let new_file = self.create_fresh_store_file();
         let writer = BufWriter::new(new_file);
-        self.writer = writer;
-        self.file_offset = 0;
     }
 
     fn create_fresh_store_file(&mut self) -> File {
@@ -204,20 +191,29 @@ impl Store {
         Self::create_store_file(self.current_file_id, &self.dir)
     }
 
+    /// Assumes mem table keys are sorted!
     fn write_mem_table_to_disk(&mut self) {
-        let file = fs::File::options()
-            .append(true)
-            .create(true)
-            .read(true)
-            .open("MEM_TABLE_WRITE_OUT.txt")
-            .unwrap();
+        let file = self.create_fresh_store_file();
 
         let mut writer = BufWriter::new(file);
 
+        let mut file_offset = 0;
+        self.store_indexes
+            .insert(self.current_file_id, StoreData::new());
+        let store_index = self.store_indexes.get_mut(&self.current_file_id).unwrap();
         for (key, value) in self.active_mem_table.iter() {
             let value_size = value.len() as u32;
             let key_size = 4;
-            Self::append_kv_to_file(&mut writer, key_size, *key, value_size, value);
+            let bytes_written =
+                Self::append_kv_to_file(&mut writer, key_size, *key, value_size, value);
+            let entry = Entry {
+                value_size: value_size as usize,
+                key_size: key_size as usize,
+                byte_offset: file_offset,
+                file_id: self.current_file_id,
+            };
+            store_index.insert(*key, entry);
+            file_offset += bytes_written;
         }
         self.active_mem_table.clear();
     }
@@ -232,19 +228,6 @@ impl Store {
                                             // removing a key that has been written to disk, then trying
                                             // to read that key, will result in looking up the value from
                                             // disk (Which is wrong!) - Add a test
-
-        let key_size = 4;
-        let value_size = 0;
-        let bytes_written =
-            Store::append_kv_to_file(&mut self.writer, key_size, key, value_size, &[]);
-        let entry = Entry {
-            value_size: value_size as usize,
-            key_size: key_size as usize,
-            byte_offset: self.file_offset,
-            file_id: self.current_file_id,
-        };
-        self.data.insert(key, entry);
-        self.file_offset += bytes_written;
     }
 
     // TODO: This name feels a bit misleading since it's just the "data" we're building up
@@ -507,7 +490,6 @@ mod tests {
     fn it_stores_and_retrieves_using_entries() {
         let test_dir = TEMP_TEST_FILE_DIR.to_string() + "entries-store";
         let mut store = Store::new(Path::new(&test_dir), false);
-        assert_eq!(store.file_offset, 0);
         let key = 1;
         let value = "2".as_bytes();
         store.put(key, value);
@@ -554,21 +536,6 @@ mod tests {
         let result = store.get(&1).unwrap();
 
         assert_eq!(result, test_value);
-    }
-
-    #[test]
-    fn it_gets_the_highest_file_id_from_dir_when_creating_store() {
-        let test_dir = TEMP_TEST_FILE_DIR.to_string() + "retrieving-highest-file-id";
-        let mut store = Store::new(Path::new(&test_dir), false);
-        store.file_size_limit_in_bytes = 1;
-        store.put(1, "10".as_bytes());
-        store.put(2, "20".as_bytes());
-        store.put(3, "30".as_bytes());
-
-        assert_eq!(store.current_file_id, 3);
-
-        let new_store = Store::new(Path::new(&test_dir), true);
-        assert_eq!(new_store.current_file_id, 3);
     }
 
     #[test]
