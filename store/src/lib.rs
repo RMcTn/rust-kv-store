@@ -10,7 +10,7 @@ type FileOffset = usize;
 
 const STORE_FILENAME_SUFFIX: &str = ".store.kv";
 
-type StoreData = HashMap<u32, Entry>;
+type StoreData = HashMap<u32, StoreEntry>;
 type StoreIndexes = HashMap<u64, StoreData>; // file id to store data index
 
 pub struct Store {
@@ -36,7 +36,7 @@ enum TableEntry {
 }
 
 #[derive(Debug, PartialEq)]
-struct Entry {
+struct StoreEntry {
     // TODO: Change these usize's to u32 for now, whilst we sort things out (easier to reason with
     // a hard 4 byte size than usize's variable size)
     value_size: usize,
@@ -208,7 +208,7 @@ impl Store {
             let key_size = 4;
             let bytes_written =
                 Self::append_kv_to_file(&mut writer, key_size, *key, value_size, value);
-            let entry = Entry {
+            let entry = StoreEntry {
                 value_size: value_size as usize,
                 key_size: key_size as usize,
                 byte_offset: file_offset,
@@ -320,7 +320,7 @@ impl Store {
             }
             let byte_offset_for_key = byte_offset;
             let kv = Store::parse_key_value_from_bytes(&mut byte_offset, &buffer);
-            let entry = Entry {
+            let entry = StoreEntry {
                 value_size: kv.value_size as usize,
                 key_size: kv.key_size as usize,
                 byte_offset: byte_offset_for_key,
@@ -403,12 +403,12 @@ impl Store {
         value: &[u8],
         file_offset: FileOffset,
         file_id: u64,
-    ) -> (Entry, usize) {
+    ) -> (StoreEntry, usize) {
         let value_size = value.len() as u32;
         let key_size = 4;
         let bytes_written =
             Store::append_kv_to_file(writer, key_size, key, value_size, Some(value));
-        let entry = Entry {
+        let entry = StoreEntry {
             value_size: value_size as usize,
             key_size: key_size as usize, // TODO: Use the actual key's size once it's not just a u32
             byte_offset: file_offset,
