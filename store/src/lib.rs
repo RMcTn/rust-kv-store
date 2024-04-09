@@ -65,7 +65,7 @@ impl Store {
         return Store {
             current_file_id: store_info.1,
             dir: dir_path.to_path_buf(),
-            mem_table_size_limit_in_bytes: 5000,
+            mem_table_size_limit_in_bytes: 1024 * 1024 * 5,
             active_mem_table: BTreeMap::new(),
             store_indexes: store_info.0,
             bytes_written_since_last_flush: 0,
