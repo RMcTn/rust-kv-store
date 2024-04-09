@@ -1,4 +1,3 @@
-// TODO: "Log" Compaction
 use std::{
     collections::{BTreeMap, HashMap},
     fs::{self, File},
@@ -13,20 +12,6 @@ const STORE_FILENAME_SUFFIX: &str = ".store.kv";
 
 type StoreData = HashMap<u32, Entry>;
 type StoreIndexes = HashMap<u64, StoreData>; // file id to store data index
-
-//
-//
-//
-//
-// TODO - Make the move to an LSM-Tree. Need to start saving file segments as SSTables, and keep
-// a memtable of writes, then persist
-//
-// Plan:
-//  Memtable first (writes happen here)
-//  Write out memtable as an SSTable
-//  Check memtable for reads
-//  Check previous sstable segments for reads after memtable (don't worry about indexing the
-//  SSTables right now. Can do later)
 
 pub struct Store {
     current_file_id: u64,
