@@ -35,7 +35,7 @@ pub struct Store {
     dir: PathBuf,
     // NOTE: file size limit is not enforced for compacted files
     pub file_size_limit_in_bytes: u64,
-    mem_table: BTreeMap<u32, Vec<u8>>,
+    active_mem_table: BTreeMap<u32, Vec<u8>>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -82,7 +82,7 @@ impl Store {
             current_file_id: store_info.1,
             dir: dir_path.to_path_buf(),
             file_size_limit_in_bytes: 5000,
-            mem_table: BTreeMap::new(),
+            active_mem_table: BTreeMap::new(),
         };
     }
 
@@ -104,7 +104,10 @@ impl Store {
             self.file_offset,
             self.current_file_id,
         );
-        self.mem_table.insert(key, value.to_owned());
+        self.active_mem_table.insert(key, value.to_owned());
+        if self.active_mem_table.len() == 5 {
+            self.write_mem_table_to_disk();
+        }
         // TODO: Keep track of how many bytes the mem table holds for deciding threshold to write
         // to disk
         // TODO: persist mem_table to disk
@@ -166,7 +169,7 @@ impl Store {
         // TODO: Handle this unwrap
         let entry = self.data.get(key)?;
 
-        return self.mem_table.get(key).cloned();
+        return self.active_mem_table.get(key).cloned();
 
         // TODO: SPEEDUP: Could persist the buffer in the Store struct, would stop needing to
         // allocate the value buffer every time. Benchmark before + after if doing this.
@@ -190,11 +193,33 @@ impl Store {
     }
 
     fn force_new_file(&mut self) {
-        self.increment_file_id();
-        let new_file = Self::create_store_file(self.current_file_id, &self.dir);
+        let new_file = self.create_fresh_store_file();
         let writer = BufWriter::new(new_file);
         self.writer = writer;
         self.file_offset = 0;
+    }
+
+    fn create_fresh_store_file(&mut self) -> File {
+        self.increment_file_id();
+        Self::create_store_file(self.current_file_id, &self.dir)
+    }
+
+    fn write_mem_table_to_disk(&mut self) {
+        let file = fs::File::options()
+            .append(true)
+            .create(true)
+            .read(true)
+            .open("MEM_TABLE_WRITE_OUT.txt")
+            .unwrap();
+
+        let mut writer = BufWriter::new(file);
+
+        for (key, value) in self.active_mem_table.iter() {
+            let value_size = value.len() as u32;
+            let key_size = 4;
+            Self::append_kv_to_file(&mut writer, key_size, *key, value_size, value);
+        }
+        self.active_mem_table.clear();
     }
 
     pub fn remove(&mut self, key: u32) {
@@ -203,7 +228,10 @@ impl Store {
         // tombstone checksum
         // TODO: Cleanup duplication with regular "store" method"
 
-        self.mem_table.remove(&key);
+        self.active_mem_table.remove(&key); // TODO: FIXME: This should be a tombstone value, otherwise
+                                            // removing a key that has been written to disk, then trying
+                                            // to read that key, will result in looking up the value from
+                                            // disk (Which is wrong!) - Add a test
 
         let key_size = 4;
         let value_size = 0;
