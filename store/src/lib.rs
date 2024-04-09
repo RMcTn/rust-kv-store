@@ -111,7 +111,6 @@ impl Store {
         if let Some(value) = value {
             writer.write_all(value).unwrap();
         }
-        writer.flush().unwrap();
         return key_size_bytes.len()
             + key_bytes.len()
             + value_size_bytes.len()
@@ -219,6 +218,7 @@ impl Store {
             file_offset += bytes_written;
         }
         self.active_mem_table.clear();
+        writer.flush().unwrap();
         self.bytes_written_since_last_flush = 0;
     }
 
