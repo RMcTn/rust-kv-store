@@ -39,7 +39,7 @@ impl Server {
                 dbg!("Got command {:?}", &cmd);
                 match cmd {
                     Command::Ping => connection.send_response(Response::Pong).unwrap(),
-                    Command::Put((key, value)) => store.write().unwrap().put(key, &value),
+                    Command::Put((key, value)) => store.write().unwrap().put(&key, &value),
                     Command::Get(key) => {
                         let value = store.read().unwrap().get(&key);
                         connection.send_response(Response::Value(value)).unwrap()

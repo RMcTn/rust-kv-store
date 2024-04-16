@@ -34,8 +34,8 @@ fn put_and_get() {
     let server_connection = TcpStream::connect(server_addr).unwrap();
     let connection = Connection::new(server_connection);
     let mut client = Client::new(connection);
-    let key = 50;
+    let key = "The almighty Omega key".as_bytes();
     let value = "Woowee for tests".as_bytes().to_vec();
-    assert!(client.put(key, value.clone()).is_ok());
-    assert_eq!(client.get(key).unwrap(), Some(value));
+    assert!(client.put(&key, value.clone()).is_ok());
+    assert_eq!(client.get(&key).unwrap(), Some(value));
 }

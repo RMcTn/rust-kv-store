@@ -30,7 +30,6 @@ Keys in newer Store files take priority over older ones, ensuring keys are alway
 
 
 #### Limitations
-- Keys are unsigned 32 bit integers for now
 - No check sums for data
 - Anything in the 'In Memory' store will be lost on crash at the moment. A write ahead log to fix this is planned.
 - No timed key expiry

@@ -6,14 +6,15 @@ fn main() {
     let mut store = Store::new(Path::new("stuff"), false);
     store.mem_table_size_limit_in_bytes = 1024 * 1024 * 1024;
 
-    store.put(50000000, "hello".as_bytes());
-    for i in 0..=10000000 {
-        store.put(i, &(i + 1).to_ne_bytes());
+    store.put(&50000000_u32.to_ne_bytes(), "hellowaoaodashdasd".as_bytes());
+    for i in 0..=10000000_u32 {
+        let key = i.to_ne_bytes();
+        store.put(&key, &key);
     }
 
     store.flush();
     // store.compact();
-    let returned = String::from_utf8(store.get(&50000000).unwrap()).unwrap();
+    let returned = String::from_utf8(store.get(&50000000_u32.to_ne_bytes()).unwrap()).unwrap();
     dbg!(returned);
 }
 
@@ -46,14 +47,15 @@ mod tests {
         let json = serde_json::to_string(&thing).unwrap();
 
         let mut store = Store::new(Path::new(&test_dir), false);
-        let key = 1;
-        store.put(key, &json.as_bytes());
+        let key = 1_u32.to_ne_bytes();
+        store.put(&key, &json.as_bytes());
 
-        for i in 5..10 {
-            store.put(i, "Some stuff here and that".as_bytes());
+        for i in 5..10_u32 {
+            let i = i.to_ne_bytes();
+            store.put(&i, "Some stuff here and that".as_bytes());
         }
 
-        store.put(key, &json.as_bytes());
+        store.put(&key, &json.as_bytes());
 
         let bytes = store.get(&key).unwrap();
         let stored_json = std::str::from_utf8(&bytes).unwrap();

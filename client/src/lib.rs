@@ -26,15 +26,16 @@ impl Client {
         }
     }
 
-    pub fn put(&mut self, key: u32, value: Vec<u8>) -> io::Result<()> {
-        self.connection.send_command(Command::Put((key, value)))
+    pub fn put(&mut self, key: &[u8], value: Vec<u8>) -> io::Result<()> {
+        self.connection
+            .send_command(Command::Put((key.to_vec(), value)))
     }
 
-    pub fn get(&mut self, key: u32) -> io::Result<Option<Vec<u8>>> {
-        self.connection.send_command(Command::Get(key))?;
+    pub fn get(&mut self, key: &[u8]) -> io::Result<Option<Vec<u8>>> {
+        self.connection.send_command(Command::Get(key.to_vec()))?;
         loop {
             if let Ok(Response::Value(value)) = self.connection.read_response() {
-                println!("Got value from server for key {}", key);
+                println!("Got value from server for key {:?}", key);
                 return Ok(value);
             }
         }

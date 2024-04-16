@@ -14,15 +14,15 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut client = Client::new(connection);
 
-    let key = 50;
+    let key = 50_u32.to_ne_bytes().to_vec();
     let value = "Will this send?";
 
     println!("Sending PING command");
     client.ping()?;
     println!("PING command sent");
 
-    println!("Sending PUT command with key: {}, value: {}", key, value);
-    client.put(key, value.as_bytes().to_vec())?;
+    println!("Sending PUT command with key: {:?}, value: {}", key, value);
+    client.put(&key, value.as_bytes().to_vec())?;
     println!("PUT command sent");
 
     Ok(())

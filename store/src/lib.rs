@@ -10,7 +10,7 @@ type FileOffset = usize;
 
 const STORE_FILENAME_SUFFIX: &str = ".store.kv";
 
-type StoreData = HashMap<u32, StoreEntry>;
+type StoreData = HashMap<Vec<u8>, StoreEntry>;
 type StoreIndexes = HashMap<u64, StoreData>; // file id to store data index
 
 pub struct Store {
@@ -20,7 +20,7 @@ pub struct Store {
     // TODO: FIXME: Anything stored in the active mem table will be lost if the process crashes.
     //      Build up a write ahead log that gets cleared every time the mem table gets flushed to
     //      make fully durable
-    active_mem_table: BTreeMap<u32, TableEntry>,
+    active_mem_table: BTreeMap<Vec<u8>, TableEntry>,
     // TODO: Sparse index for keys in the store. Since the keys are
     //     sorted, we only need to keep a subset of keys indexed. We can scan for the key in the
     //     file if it isn't indexed already (keys are sorted, so we know at least what key the
@@ -37,8 +37,6 @@ enum TableEntry {
 
 #[derive(Debug, PartialEq)]
 struct StoreEntry {
-    // TODO: Change these usize's to u32 for now, whilst we sort things out (easier to reason with
-    // a hard 4 byte size than usize's variable size)
     value_size: usize,
     key_size: usize,
     byte_offset: FileOffset,
@@ -49,7 +47,7 @@ struct StoreEntry {
 struct KeyValue {
     value_size: u32,
     key_size: u32,
-    key: u32,
+    key: Vec<u8>,
     value: Vec<u8>,
 }
 
@@ -80,12 +78,11 @@ impl Store {
     }
 
     // Stores value with key. User is responsible for serializing/deserializing
-    pub fn put(&mut self, key: u32, value: &[u8]) {
-        // TODO: Make key a byte slice as well
-
+    pub fn put(&mut self, key: &[u8], value: &[u8]) {
+        let key_len = key.len();
         self.active_mem_table
-            .insert(key, TableEntry::Populated(value.to_owned()));
-        self.bytes_written_since_last_flush += (key.to_le_bytes().len() + value.len()) as u64;
+            .insert(key.to_vec(), TableEntry::Populated(value.to_owned()));
+        self.bytes_written_since_last_flush += (key_len + value.len()) as u64;
         if self.bytes_written_since_last_flush > self.mem_table_size_limit_in_bytes {
             // TODO: Handle ongoing writes as we persist the mem table in the background
             self.write_mem_table_to_disk();
@@ -96,25 +93,21 @@ impl Store {
     fn append_kv_to_file(
         writer: &mut BufWriter<File>,
         key_size: u32,
-        key: u32,
+        key: &[u8],
         value_size: u32,
         value: Option<&[u8]>,
     ) -> usize {
         // TODO: Make sure this ALWAYS appends and doesn't just write wherever
         let key_size_bytes = key_size.to_le_bytes();
         writer.write_all(&key_size_bytes).unwrap();
-        let key_bytes = key.to_le_bytes();
-        writer.write_all(&key_bytes).unwrap();
+        writer.write_all(&key).unwrap();
         let value_size_bytes = value_size.to_le_bytes();
         writer.write_all(&value_size_bytes).unwrap();
 
         if let Some(value) = value {
             writer.write_all(value).unwrap();
         }
-        return key_size_bytes.len()
-            + key_bytes.len()
-            + value_size_bytes.len()
-            + value_size as usize;
+        return key_size_bytes.len() + key.len() + value_size_bytes.len() + value_size as usize;
     }
 
     fn file_path_for_file_id(file_id: u64, dir_path: &Path) -> PathBuf {
@@ -147,7 +140,7 @@ impl Store {
         self.current_file_id += 1;
     }
 
-    pub fn get(&self, key: &u32) -> Option<Vec<u8>> {
+    pub fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
         match self.active_mem_table.get(key).cloned() {
             Some(table_entry) => match table_entry {
                 TableEntry::Tombstone => return None,
@@ -205,16 +198,16 @@ impl Store {
                 TableEntry::Tombstone => (None, 0),
                 TableEntry::Populated(v) => (Some(v.as_slice()), v.len() as u32),
             };
-            let key_size = 4;
+            let key_size = key.len();
             let bytes_written =
-                Self::append_kv_to_file(&mut writer, key_size, *key, value_size, value);
+                Self::append_kv_to_file(&mut writer, key_size as u32, &key, value_size, value);
             let entry = StoreEntry {
                 value_size: value_size as usize,
                 key_size: key_size as usize,
                 byte_offset: file_offset,
                 file_id: self.current_file_id,
             };
-            store_index.insert(*key, entry);
+            store_index.insert(key.clone(), entry);
             file_offset += bytes_written;
         }
         self.active_mem_table.clear();
@@ -222,13 +215,14 @@ impl Store {
         self.bytes_written_since_last_flush = 0;
     }
 
-    pub fn remove(&mut self, key: u32) {
+    pub fn remove(&mut self, key: &[u8]) {
         // No value after key is our "tombstone" for now - Not a great idea if we ever wanted to
         // checksum rows for corruption/crash recovery. No value = No bytes = Nothing to use as a
         // tombstone checksum
         // TODO: Cleanup duplication with regular "store" method"
 
-        self.active_mem_table.insert(key, TableEntry::Tombstone);
+        self.active_mem_table
+            .insert(key.to_owned(), TableEntry::Tombstone);
     }
 
     // TODO: This name feels a bit misleading since it's just the "data" we're building up
@@ -273,9 +267,8 @@ impl Store {
             u32::from_le_bytes(bytes[*byte_offset..(*byte_offset + 4)].try_into().unwrap());
         *byte_offset += 4;
 
-        let key = u32::from_le_bytes(bytes[*byte_offset..(*byte_offset + 4)].try_into().unwrap());
+        let key = bytes[*byte_offset..(*byte_offset + key_size as usize)].to_vec();
         *byte_offset += key_size as usize;
-        // TODO: Check this doesn't contain newline
         let value_size =
             u32::from_le_bytes(bytes[*byte_offset..(*byte_offset + 4)].try_into().unwrap());
         *byte_offset += 4;
@@ -291,7 +284,11 @@ impl Store {
         return kv;
     }
 
-    fn parse_file_into_kv(dir_path: &Path, file_id: u64, key_values: &mut HashMap<u32, Vec<u8>>) {
+    fn parse_file_into_kv(
+        dir_path: &Path,
+        file_id: u64,
+        key_values: &mut HashMap<Vec<u8>, Vec<u8>>,
+    ) {
         let path_to_open = Self::file_path_for_file_id(file_id, dir_path);
         let mut file = File::open(path_to_open).unwrap();
         let mut buffer = Vec::new();
@@ -378,11 +375,11 @@ impl Store {
         let mut file_offset = 0;
         for (k, v) in &compacted_kvs {
             let (entry, bytes_written) =
-                Self::create_entry(&mut compaction_file, *k, v, file_offset, compaction_file_id);
+                Self::create_entry(&mut compaction_file, &k, v, file_offset, compaction_file_id);
 
             file_offset += bytes_written;
 
-            mapping_entries.insert(*k, entry);
+            mapping_entries.insert(k.to_owned(), entry);
         }
 
         std::fs::rename(compaction_file_path, compaction_sacrifice_file_path).unwrap();
@@ -399,15 +396,15 @@ impl Store {
     /// Returns the Entry created for key and value, and how many bytes were written to file
     fn create_entry(
         writer: &mut BufWriter<File>,
-        key: u32,
+        key: &[u8],
         value: &[u8],
         file_offset: FileOffset,
         file_id: u64,
     ) -> (StoreEntry, usize) {
         let value_size = value.len() as u32;
-        let key_size = 4;
+        let key_size = key.len();
         let bytes_written =
-            Store::append_kv_to_file(writer, key_size, key, value_size, Some(value));
+            Store::append_kv_to_file(writer, key_size as u32, key, value_size, Some(value));
         let entry = StoreEntry {
             value_size: value_size as usize,
             key_size: key_size as usize, // TODO: Use the actual key's size once it's not just a u32
@@ -428,29 +425,23 @@ mod tests {
     fn it_stores_and_retreives() {
         let test_dir = TEMP_TEST_FILE_DIR.to_string() + "stores_and_retrieves";
         let mut store = Store::new(Path::new(&test_dir), false);
-        let test_key = 50;
+        let test_key = 50_u32.to_ne_bytes();
         assert_eq!(store.get(&test_key), None);
 
-        store.put(test_key, "100".as_bytes());
+        store.put(&test_key, "100".as_bytes());
         assert_eq!(store.get(&test_key).unwrap(), 100.to_string().as_bytes());
-        store.put(test_key, "101".as_bytes());
+        store.put(&test_key, "101".as_bytes());
         assert_eq!(store.get(&test_key).unwrap(), 101.to_string().as_bytes());
-
-        store.put(test_key + 1, "101".as_bytes());
-        assert_eq!(
-            store.get(&(test_key + 1)).unwrap(),
-            101.to_string().as_bytes()
-        );
     }
 
     #[test]
     fn it_deletes() {
         let test_dir = TEMP_TEST_FILE_DIR.to_string() + "deletes";
         let mut store = Store::new(Path::new(&test_dir), false);
-        let test_key = 50;
-        store.put(test_key, "100".as_bytes());
+        let test_key = 50_u32.to_ne_bytes();
+        store.put(&test_key, "100".as_bytes());
 
-        store.remove(test_key);
+        store.remove(&test_key);
         assert_eq!(store.get(&test_key), None);
     }
 
@@ -458,14 +449,14 @@ mod tests {
     fn it_persists() {
         let test_dir = TEMP_TEST_FILE_DIR.to_string() + "persists";
         let mut store = Store::new(Path::new(&test_dir), false);
-        let deleted_test_key = 50;
-        let other_test_key = 999;
-        store.put(deleted_test_key, "100".as_bytes());
-        store.remove(deleted_test_key);
+        let deleted_test_key = 50_u32.to_ne_bytes();
+        let other_test_key = "Longer key".as_bytes();
+        store.put(&deleted_test_key, "100".as_bytes());
+        store.remove(&deleted_test_key);
 
-        store.put(other_test_key, "1000".as_bytes());
-        store.remove(other_test_key);
-        store.put(other_test_key, "2000".as_bytes());
+        store.put(&other_test_key, "1000".as_bytes());
+        store.remove(&other_test_key);
+        store.put(&other_test_key, "2000".as_bytes());
 
         store.flush();
 
@@ -482,15 +473,15 @@ mod tests {
     fn it_stores_and_retrieves_using_entries() {
         let test_dir = TEMP_TEST_FILE_DIR.to_string() + "entries-store";
         let mut store = Store::new(Path::new(&test_dir), false);
-        let key = 1;
+        let key = 1_u32.to_ne_bytes();
         let value = "2".as_bytes();
-        store.put(key, value);
+        store.put(&key, value);
 
         let bytes = store.get(&key).unwrap();
         assert_eq!(bytes, value);
-        let key = 500;
+        let key = 500_u32.to_ne_bytes();
         let value = "5000000".as_bytes();
-        store.put(key, value);
+        store.put(&key, value);
         let bytes = store.get(&key).unwrap();
         assert_eq!(bytes, value);
     }
@@ -501,13 +492,13 @@ mod tests {
         let mut store = Store::new(Path::new(&test_dir), false);
         store.mem_table_size_limit_in_bytes = 1;
         assert_eq!(store.current_file_id, 1);
-        let key = 1;
+        let key = 1_u32.to_ne_bytes();
         let value = "2".as_bytes();
-        store.put(key, value);
+        store.put(&key, value);
 
-        let key = 500;
+        let key = 500_u32.to_ne_bytes();
         let value = "5000000".as_bytes();
-        store.put(key, value);
+        store.put(&key, value);
         assert_eq!(store.current_file_id, 3);
         let files: Vec<_> = fs::read_dir(test_dir).unwrap().collect();
         assert_eq!(files.len(), 2);
@@ -520,12 +511,13 @@ mod tests {
         store.mem_table_size_limit_in_bytes = 1;
         assert_eq!(store.current_file_id, 1);
 
+        let key = "Longer key".as_bytes();
         let test_value = "10".as_bytes();
-        store.put(1, test_value);
-        store.put(2, "20".as_bytes());
-        store.put(3, "30".as_bytes());
+        store.put(&key, test_value);
+        store.put(&2_u32.to_ne_bytes(), "20".as_bytes());
+        store.put(&3_u32.to_ne_bytes(), "30".as_bytes());
 
-        let result = store.get(&1).unwrap();
+        let result = store.get(&key).unwrap();
 
         assert_eq!(result, test_value);
     }
@@ -534,17 +526,18 @@ mod tests {
     fn it_compacts_old_files_into_a_merged_file() {
         let test_dir = TEMP_TEST_FILE_DIR.to_string() + "file-compaction/untouched-active-file";
         let mut store = Store::new(Path::new(&test_dir), false);
-        store.put(1, "10".as_bytes());
-        store.put(1, "1010".as_bytes());
-        store.put(2, "20".as_bytes());
-        store.put(2, "2020".as_bytes());
-        store.remove(2);
+        store.put(&1_u32.to_ne_bytes(), "10".as_bytes());
+        store.put(&1_u32.to_ne_bytes(), "1010".as_bytes());
+        store.put(&2_u32.to_ne_bytes(), "20".as_bytes());
+        store.put(&2_u32.to_ne_bytes(), "2020".as_bytes());
+        store.remove(&2_u32.to_ne_bytes());
         store.flush();
-        store.put(3, "old".as_bytes());
-        store.put(1, "101010".as_bytes());
+        store.put(&3_u32.to_ne_bytes(), "old".as_bytes());
+        store.put(&1_u32.to_ne_bytes(), "101010".as_bytes());
         store.flush();
         assert_eq!(store.current_file_id, 3);
-        store.put(3, "new".as_bytes());
+
+        store.put(&3_u32.to_ne_bytes(), "new".as_bytes());
 
         store.compact();
         let entries = fs::read_dir(test_dir).unwrap();
@@ -553,40 +546,46 @@ mod tests {
         let actual_num_files = entries.count();
 
         assert_eq!(expected_num_files, actual_num_files);
-        assert_eq!(store.get(&3), Some("new".as_bytes().to_vec()));
+        assert_eq!(
+            store.get(&3_u32.to_ne_bytes()),
+            Some("new".as_bytes().to_vec())
+        );
     }
 
     #[test]
     fn compaction_will_squash_multiple_of_same_key_into_latest_value() {
         let test_dir = TEMP_TEST_FILE_DIR.to_string() + "file-compaction/remove-duplicates";
         let mut store = Store::new(Path::new(&test_dir), false);
-        store.put(1, "10".as_bytes());
-        store.put(1, "1010".as_bytes());
-        store.put(2, "20".as_bytes());
-        store.put(2, "2020".as_bytes());
-        store.remove(2);
-        store.put(2, "202020".as_bytes());
+        let key_one = "Arbitrary string".as_bytes();
+        let key_two = 2_u32.to_ne_bytes();
+        let key_three = 3_u32.to_ne_bytes();
+        store.put(&key_one, "10".as_bytes());
+        store.put(&key_one, "1010".as_bytes());
+        store.put(&key_two, "20".as_bytes());
+        store.put(&key_two, "2020".as_bytes());
+        store.remove(&key_two);
+        store.put(&key_two, "202020".as_bytes());
         store.flush();
-        store.put(1, "101010".as_bytes());
+        store.put(&key_one, "101010".as_bytes());
         store.flush();
         assert_eq!(store.current_file_id, 3);
-        store.put(3, "new".as_bytes());
+        store.put(&key_three, "new".as_bytes());
 
         store.compact();
 
-        assert_eq!(store.get(&1), Some("101010".as_bytes().to_vec()));
-        assert_eq!(store.get(&2), Some("202020".as_bytes().to_vec()));
+        assert_eq!(store.get(&key_one), Some("101010".as_bytes().to_vec()));
+        assert_eq!(store.get(&key_two), Some("202020".as_bytes().to_vec()));
     }
 
     #[test]
     fn mem_table_tombstones_removed_values() {
         let test_dir = TEMP_TEST_FILE_DIR.to_string() + "tombstone/mem-table-tombstone";
         let mut store = Store::new(Path::new(&test_dir), false);
-        let key_to_remove = 1;
-        store.put(key_to_remove, "10".as_bytes());
+        let key_to_remove = 1_u32.to_ne_bytes();
+        store.put(&key_to_remove, "10".as_bytes());
         store.flush();
         assert_eq!(store.get(&key_to_remove), Some("10".as_bytes().to_vec()));
-        store.remove(key_to_remove);
+        store.remove(&key_to_remove);
         assert_eq!(store.get(&key_to_remove), None);
     }
     // TODO: Some tombstone tests
