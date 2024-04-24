@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
     fs::{self, File},
-    io::{BufWriter, Read, Write},
+    io::{BufReader, BufWriter, Read, Write},
     os::unix::prelude::FileExt,
     path::{Path, PathBuf},
 };
@@ -27,6 +27,7 @@ pub struct Store {
     //     requested key comes AFTER)
     store_indexes: StoreIndexes,
     bytes_written_since_last_flush: u64,
+    wal_writer: BufWriter<File>,
 }
 
 #[derive(Clone)]
@@ -62,6 +63,13 @@ impl Store {
         }
         fs::create_dir_all(dir_path).unwrap();
 
+        // TODO: Read the write ahead log before clearing it
+        let write_ahead_log_file = fs::File::options()
+            .write(true)
+            .create(true)
+            .open(dir_path.join(&"write_ahead_log.txt"))
+            .unwrap();
+
         let store_info = Store::build_store_from_dir(dir_path);
         return Store {
             current_file_id: store_info.1,
@@ -70,6 +78,7 @@ impl Store {
             active_mem_table: BTreeMap::new(),
             store_indexes: store_info.0,
             bytes_written_since_last_flush: 0,
+            wal_writer: BufWriter::new(write_ahead_log_file),
         };
     }
 
@@ -225,13 +234,16 @@ impl Store {
             .insert(key.to_owned(), TableEntry::Tombstone);
     }
 
+    fn is_store_file(path: &PathBuf) -> bool {
+        path.file_name()
+            .unwrap()
+            .to_string_lossy()
+            .ends_with(STORE_FILENAME_SUFFIX)
+    }
+
     // TODO: This name feels a bit misleading since it's just the "data" we're building up
     fn build_store_from_dir(dir_path: &Path) -> (StoreIndexes, u64) {
-        let mut entries = fs::read_dir(dir_path)
-            .unwrap()
-            .map(|res| res.map(|e| e.path()))
-            .collect::<Result<Vec<_>, std::io::Error>>()
-            .unwrap();
+        let mut entries = Self::get_store_files(dir_path);
 
         entries.sort();
         // TODO: Assuming that the directory only holds good data, and no bad files (such as
@@ -335,15 +347,19 @@ impl Store {
         return file_id;
     }
 
+    fn get_store_files(dir: &Path) -> Vec<PathBuf> {
+        // TODO: NOTE: Assuming the filepaths here are all perfect for the program for now
+        fs::read_dir(dir)
+            .unwrap()
+            .map(|res| res.map(|e| e.path()).unwrap())
+            .filter(|path| Self::is_store_file(&path))
+            .collect::<Vec<_>>()
+    }
+
     pub fn compact(&mut self) {
         // TODO: Background thread!
 
-        // TODO: NOTE: Assuming the filepaths here are all perfect for the program for now
-        let mut files_for_compaction = fs::read_dir(&self.dir)
-            .unwrap()
-            .map(|res| res.map(|e| e.path()))
-            .collect::<Result<Vec<_>, std::io::Error>>()
-            .unwrap();
+        let mut files_for_compaction = Self::get_store_files(&self.dir);
 
         // TODO: Is there a limit to compaction for files? i.e a certain length? Ignoring for
         // now!
@@ -417,6 +433,8 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use super::*;
 
     const TEMP_TEST_FILE_DIR: &str = "./tmp_test_files/";
@@ -499,9 +517,10 @@ mod tests {
         let key = 500_u32.to_ne_bytes();
         let value = "5000000".as_bytes();
         store.put(&key, value);
+
         assert_eq!(store.current_file_id, 3);
-        let files: Vec<_> = fs::read_dir(test_dir).unwrap().collect();
-        assert_eq!(files.len(), 2);
+        let store_files = Store::get_store_files(&PathBuf::from(&test_dir));
+        assert_eq!(store_files.len(), 2);
     }
 
     #[test]
@@ -540,12 +559,12 @@ mod tests {
         store.put(&3_u32.to_ne_bytes(), "new".as_bytes());
 
         store.compact();
-        let entries = fs::read_dir(test_dir).unwrap();
+        let store_files = Store::get_store_files(&PathBuf::from(&test_dir));
 
-        let expected_num_files = 1;
-        let actual_num_files = entries.count();
+        let expected_store_files = 1;
+        let actual_store_files = store_files.len();
 
-        assert_eq!(expected_num_files, actual_num_files);
+        assert_eq!(expected_store_files, actual_store_files);
         assert_eq!(
             store.get(&3_u32.to_ne_bytes()),
             Some("new".as_bytes().to_vec())
