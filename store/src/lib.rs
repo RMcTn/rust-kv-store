@@ -92,6 +92,14 @@ impl Store {
         self.active_mem_table
             .insert(key.to_vec(), TableEntry::Populated(value.to_owned()));
         self.bytes_written_since_last_flush += (key_len + value.len()) as u64;
+        Self::append_kv_to_file(
+            &mut self.wal_writer,
+            key.len() as u32,
+            key,
+            value.len() as u32,
+            Some(value),
+        );
+        self.wal_writer.flush().unwrap();
         if self.bytes_written_since_last_flush > self.mem_table_size_limit_in_bytes {
             // TODO: Handle ongoing writes as we persist the mem table in the background
             self.write_mem_table_to_disk();
@@ -230,8 +238,12 @@ impl Store {
         // tombstone checksum
         // TODO: Cleanup duplication with regular "store" method"
 
+        // TODO: FIXME: We'll don't persist the mem table with deletes
+        // TODO: FIXME: REFACTOR: We don't increase the mem table bytes written on removes
         self.active_mem_table
             .insert(key.to_owned(), TableEntry::Tombstone);
+        Self::append_kv_to_file(&mut self.wal_writer, key.len() as u32, key, 0, None);
+        self.wal_writer.flush().unwrap();
     }
 
     fn is_store_file(path: &PathBuf) -> bool {
@@ -315,7 +327,6 @@ impl Store {
         }
     }
 
-    // TODO: Why do we take a mut reference to store data and return an actual struct?
     fn parse_file_into_store_data(dir_path: &Path, file_id: u64, store_data: &mut StoreData) {
         let path_to_open = Self::file_path_for_file_id(file_id, dir_path);
         let mut file = File::open(path_to_open).unwrap();
