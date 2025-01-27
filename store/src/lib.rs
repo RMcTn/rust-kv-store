@@ -44,6 +44,7 @@ struct StoreEntry {
     key_size: usize,
     byte_offset: FileOffset,
     file_id: u64,
+    // TODO: Checksum for key + value
 }
 
 #[derive(Debug, PartialEq)]
@@ -249,7 +250,7 @@ impl Store {
     pub fn remove(&mut self, key: &[u8]) {
         // No value after key is our "tombstone" for now - Not a great idea if we ever wanted to
         // checksum rows for corruption/crash recovery. No value = No bytes = Nothing to use as a
-        // tombstone checksum
+        // tombstone checksum(?)
         // TODO: Cleanup duplication with regular "store" method"
 
         // TODO: FIXME: We'll don't persist the mem table with deletes
@@ -290,7 +291,7 @@ impl Store {
             store_index.insert(current_file_id, StoreData::new());
             let store_data = store_index.get_mut(&current_file_id).unwrap();
 
-            Self::parse_file_into_store_data(&dir_path, current_file_id, store_data);
+            Self::parse_store_file_into_store_data(&dir_path, current_file_id, store_data);
         }
         return (store_index, highest_file_id);
     }
@@ -341,7 +342,7 @@ impl Store {
         }
     }
 
-    fn parse_file_into_store_data(dir_path: &Path, file_id: u64, store_data: &mut StoreData) {
+    fn parse_store_file_into_store_data(dir_path: &Path, file_id: u64, store_data: &mut StoreData) {
         let path_to_open = Self::file_path_for_file_id(file_id, dir_path);
         let mut file = File::open(path_to_open).unwrap();
         let mut buffer = Vec::new();
