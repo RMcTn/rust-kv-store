@@ -32,7 +32,7 @@ pub struct Store {
     wal_writer: BufWriter<File>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum TableEntry {
     Tombstone,
     Populated(Vec<u8>),
@@ -66,15 +66,22 @@ impl Store {
         }
         fs::create_dir_all(dir_path).unwrap();
 
-        // TODO: Read the write ahead log before clearing it
+        let store_info = Store::build_store_from_dir(dir_path);
+
+        // If the WAL exists, that is unpersisted data from most recent writes, so data from
+        // from the WAL should overwrite existing store info
+        // Remember - Those writes havent been persisted yet, so there is no associated file ID
+        // TODO: Test for recovering from WAL
+        let recovered_wal_kvs =
+            Store::restore_from_wal(dir_path.join(WRITE_AHEAD_LOG_FILENAME)).unwrap();
+
         let write_ahead_log_file = fs::File::options()
             .write(true)
             .create(true)
             .open(dir_path.join(WRITE_AHEAD_LOG_FILENAME))
             .unwrap();
 
-        let store_info = Store::build_store_from_dir(dir_path);
-        return Store {
+        let mut store = Store {
             current_file_id: store_info.1,
             dir: dir_path.to_path_buf(),
             mem_table_size_limit_in_bytes: 1024 * 1024 * 5,
@@ -83,10 +90,17 @@ impl Store {
             bytes_written_since_last_flush: 0,
             wal_writer: BufWriter::new(write_ahead_log_file),
         };
+
+        for kv in &recovered_wal_kvs {
+            store.put_into_memory(&kv.key, &kv.value);
+        }
+
+        return store;
     }
 
-    pub fn flush(&mut self) {
+    pub fn flush_pending_writes(&mut self) {
         self.write_mem_table_to_disk();
+        self.truncate_wal().unwrap();
     }
 
     fn truncate_wal(&mut self) -> std::io::Result<()> {
@@ -100,12 +114,16 @@ impl Store {
         std::fs::rename(temp_log_filename, self.dir.join(WRITE_AHEAD_LOG_FILENAME))
     }
 
-    // Stores value with key. User is responsible for serializing/deserializing
-    pub fn put(&mut self, key: &[u8], value: &[u8]) {
+    /// Write a key value pair into memory, with no durability
+    fn put_into_memory(&mut self, key: &[u8], value: &[u8]) {
         let key_len = key.len();
         self.active_mem_table
             .insert(key.to_vec(), TableEntry::Populated(value.to_owned()));
         self.bytes_written_since_last_flush += (key_len + value.len()) as u64;
+    }
+
+    // Stores value with key. User is responsible for serializing/deserializing
+    pub fn put(&mut self, key: &[u8], value: &[u8]) {
         Self::append_kv_to_file(
             &mut self.wal_writer,
             key.len() as u32,
@@ -114,10 +132,10 @@ impl Store {
             Some(value),
         );
         self.wal_writer.flush().unwrap();
+        self.put_into_memory(key, value);
         if self.bytes_written_since_last_flush > self.mem_table_size_limit_in_bytes {
             // TODO: Handle ongoing writes as we persist the mem table in the background
-            self.write_mem_table_to_disk();
-            self.truncate_wal().unwrap();
+            self.flush_pending_writes();
         }
     }
 
@@ -455,6 +473,36 @@ impl Store {
         };
         return (entry, bytes_written);
     }
+
+    fn restore_from_wal(write_ahead_log_path: PathBuf) -> Result<Vec<KeyValue>, std::io::Error> {
+        let mut write_ahead_log_file =
+            match fs::File::options().read(true).open(write_ahead_log_path) {
+                Ok(file) => file,
+                Err(e) => match e.kind() {
+                    std::io::ErrorKind::NotFound => {
+                        // No WAL, nothing to restore!
+                        return Ok(vec![]);
+                    }
+                    _ => return Err(e),
+                },
+            };
+
+        let mut buffer = Vec::new();
+        write_ahead_log_file.read_to_end(&mut buffer).unwrap();
+        let mut byte_offset = 0;
+
+        let mut recovered_kvs = Vec::new();
+
+        loop {
+            if byte_offset >= buffer.len() {
+                break;
+            }
+            let kv = Store::parse_key_value_from_bytes(&mut byte_offset, &buffer);
+            recovered_kvs.push(kv);
+        }
+
+        return Ok(recovered_kvs);
+    }
 }
 
 #[cfg(test)]
@@ -500,7 +548,7 @@ mod tests {
         store.remove(&other_test_key);
         store.put(&other_test_key, "2000".as_bytes());
 
-        store.flush();
+        store.flush_pending_writes();
 
         let store = Store::new(Path::new(&test_dir), true);
 
@@ -574,10 +622,10 @@ mod tests {
         store.put(&2_u32.to_ne_bytes(), "20".as_bytes());
         store.put(&2_u32.to_ne_bytes(), "2020".as_bytes());
         store.remove(&2_u32.to_ne_bytes());
-        store.flush();
+        store.flush_pending_writes();
         store.put(&3_u32.to_ne_bytes(), "old".as_bytes());
         store.put(&1_u32.to_ne_bytes(), "101010".as_bytes());
-        store.flush();
+        store.flush_pending_writes();
         assert_eq!(store.current_file_id, 3);
 
         store.put(&3_u32.to_ne_bytes(), "new".as_bytes());
@@ -608,9 +656,9 @@ mod tests {
         store.put(&key_two, "2020".as_bytes());
         store.remove(&key_two);
         store.put(&key_two, "202020".as_bytes());
-        store.flush();
+        store.flush_pending_writes();
         store.put(&key_one, "101010".as_bytes());
-        store.flush();
+        store.flush_pending_writes();
         assert_eq!(store.current_file_id, 3);
         store.put(&key_three, "new".as_bytes());
 
@@ -626,7 +674,7 @@ mod tests {
         let mut store = Store::new(Path::new(&test_dir), false);
         let key_to_remove = 1_u32.to_ne_bytes();
         store.put(&key_to_remove, "10".as_bytes());
-        store.flush();
+        store.flush_pending_writes();
         assert_eq!(store.get(&key_to_remove), Some("10".as_bytes().to_vec()));
         store.remove(&key_to_remove);
         assert_eq!(store.get(&key_to_remove), None);

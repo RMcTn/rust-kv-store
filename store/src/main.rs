@@ -12,7 +12,7 @@ fn main() {
         store.put(&key, &key);
     }
 
-    store.flush();
+    store.flush_pending_writes();
     // store.compact();
     let returned = String::from_utf8(store.get(&50000000_u32.to_ne_bytes()).unwrap()).unwrap();
     dbg!(returned);
