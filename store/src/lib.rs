@@ -10,6 +10,8 @@ type FileOffset = usize;
 
 const STORE_FILENAME_SUFFIX: &str = ".store.kv";
 
+const WRITE_AHEAD_LOG_FILENAME: &str = "write_ahead_log.txt";
+
 type StoreData = HashMap<Vec<u8>, StoreEntry>;
 type StoreIndexes = HashMap<u64, StoreData>; // file id to store data index
 
@@ -67,7 +69,7 @@ impl Store {
         let write_ahead_log_file = fs::File::options()
             .write(true)
             .create(true)
-            .open(dir_path.join(&"write_ahead_log.txt"))
+            .open(dir_path.join(WRITE_AHEAD_LOG_FILENAME))
             .unwrap();
 
         let store_info = Store::build_store_from_dir(dir_path);
@@ -84,6 +86,17 @@ impl Store {
 
     pub fn flush(&mut self) {
         self.write_mem_table_to_disk();
+    }
+
+    fn truncate_wal(&mut self) -> std::io::Result<()> {
+        let temp_log_filename = self.dir.join(WRITE_AHEAD_LOG_FILENAME.to_owned() + ".temp");
+        let _log_file = fs::File::options()
+            .create(true)
+            .write(true)
+            .open(&temp_log_filename)
+            .unwrap();
+
+        std::fs::rename(temp_log_filename, self.dir.join(WRITE_AHEAD_LOG_FILENAME))
     }
 
     // Stores value with key. User is responsible for serializing/deserializing
@@ -103,6 +116,7 @@ impl Store {
         if self.bytes_written_since_last_flush > self.mem_table_size_limit_in_bytes {
             // TODO: Handle ongoing writes as we persist the mem table in the background
             self.write_mem_table_to_disk();
+            self.truncate_wal().unwrap();
         }
     }
 
@@ -444,8 +458,6 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use super::*;
 
     const TEMP_TEST_FILE_DIR: &str = "./tmp_test_files/";
