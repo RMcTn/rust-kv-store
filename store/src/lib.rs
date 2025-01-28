@@ -131,7 +131,6 @@ impl Store {
             value.len() as u32,
             Some(value),
         );
-        self.wal_writer.flush().unwrap();
         self.put_into_memory(key, value);
         if self.bytes_written_since_last_flush > self.mem_table_size_limit_in_bytes {
             // TODO: Handle ongoing writes as we persist the mem table in the background
@@ -157,6 +156,7 @@ impl Store {
         if let Some(value) = value {
             writer.write_all(value).unwrap();
         }
+        writer.flush().unwrap();
         return key_size_bytes.len() + key.len() + value_size_bytes.len() + value_size as usize;
     }
 
@@ -273,10 +273,9 @@ impl Store {
 
         // TODO: FIXME: We'll don't persist the mem table with deletes
         // TODO: FIXME: REFACTOR: We don't increase the mem table bytes written on removes
+        Self::append_kv_to_file(&mut self.wal_writer, key.len() as u32, key, 0, None);
         self.active_mem_table
             .insert(key.to_owned(), TableEntry::Tombstone);
-        Self::append_kv_to_file(&mut self.wal_writer, key.len() as u32, key, 0, None);
-        self.wal_writer.flush().unwrap();
     }
 
     fn is_store_file(path: &PathBuf) -> bool {
